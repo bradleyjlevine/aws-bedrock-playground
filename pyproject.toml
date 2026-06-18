@@ -1,0 +1,21 @@
+[project]
+name = "aws-bedrock-playground"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3>=1.38",
+    "anthropic[bedrock]>=0.55",
+    "openai>=1.84",
+    "aws-bedrock-token-generator>=0.1",
+    "strands-agents[bidi]>=0.1",
+    "strands-agents-tools[rss]>=0.8",
+    "prompt-toolkit>=3.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pypdf>=4.0",
+    "beautifulsoup4>=4.12",
+    "pyaudio>=0.2.14",
+]
+
+[dependency-groups]
+dev = []

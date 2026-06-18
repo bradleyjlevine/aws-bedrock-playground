@@ -1,0 +1,174 @@
+# AWS Bedrock Playground
+
+Hello-world examples for the main AWS Bedrock surfaces, including OpenAI GPT-5.5 and Codex (launched June 1, 2026).
+
+## Files
+
+| File | Model | API / Path | Notes |
+|------|-------|-----------|-------|
+| `01_hello_fm.py` | Claude Haiku 4.5 | Converse API · `bedrock-runtime` | Recommended for most use cases |
+| `02_hello_agent.py` | _(your agent)_ | InvokeAgent · `bedrock-agent-runtime` | Requires a pre-created agent |
+| `03_hello_mantle_anthropic.py` | Claude Haiku 4.5 | Anthropic Messages API · `bedrock-mantle` | Uses `anthropic[bedrock]` SDK |
+| `04_hello_mantle_openai.py` | GPT OSS 120B | OpenAI Responses API · `bedrock-mantle /v1` | OSS/Nova models use `/v1` path |
+| `05_hello_codex.py` | GPT-5.5 | OpenAI Responses API · `bedrock-mantle /openai/v1` | Codex coding agent |
+| `06_hello_strands_agent.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Single agent with Bedrock guardrail |
+| `07_hello_strands_multiagent.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Multi-agent: fetcher + time + orchestrator summarising Krebs feed |
+| `08_hello_strands_custom_tool.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Custom tools with `@tool` decorator |
+| `09_hello_strands_session.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Persistent conversation with `FileSessionManager` + `current_time` |
+| `10_hello_strands_swarm.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Swarm: autonomous agent handoff (triage → specialist) |
+| `11_hello_strands_streaming.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Streaming CLI chat + `current_time` + HITL via `handoff_to_user` |
+| `12_hello_strands_webui.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | FastAPI + SSE browser chat + `current_time` + HITL approval card |
+| `13_cybersec_summary_webui.py` | GPT-5.5 / GPT-5.4 | OpenAI Responses API · `bedrock-mantle /openai/v1` | FastAPI + SSE summary UI using `AsyncBedrockOpenAI` |
+| `14_cybersec_triage_graph.py` | Claude Haiku 4.5 | Strands Graph · `bedrock-runtime` | Multi-agent cyber triage graph for PDF or URL inputs |
+| `15_structured_cybersec_output.py` | Claude Haiku 4.5 | Strands structured output · `bedrock-runtime` | Validated Pydantic cyber briefing object from PDF or URL inputs |
+| `16_strands_memory_advisor.py` | Claude Haiku 4.5 | Strands tools · `bedrock-runtime` | Local durable memory tools for briefing preferences |
+| `17_mcp_repo_tools_agent.py` | Claude Haiku 4.5 | Strands MCP · `bedrock-runtime` | Native tools + local stdio MCP + optional remote MCP tools in one agent |
+| `18_voice_incident_briefing.py` | Nova Sonic | Strands bidirectional streaming · `bedrock-runtime` | Voice incident briefing assistant |
+| `19_sandboxed_code_analysis_agent.py` | Claude Haiku 4.5 | Strands DockerSandbox · `bedrock-runtime` | Static Python snippet triage through a Docker sandbox |
+| `20_workflow_research_report.py` | Claude Haiku 4.5 | Strands workflow tool · `bedrock-runtime` | Dependent cyber research workflow with task status |
+| `21_hello_strands_mantle_anthropic.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-mantle /anthropic` | Custom Strands model adapter using `AsyncAnthropicBedrockMantle` |
+| `22_hello_strands_mantle_gpt54.py` | GPT-5.4 | Strands SDK · `bedrock-mantle /openai/v1` | Custom Strands `OpenAIResponsesModel` adapter for GPT-5.4 |
+
+## Setup
+
+```bash
+uv sync
+```
+
+## Authentication
+
+None of these examples use long-lived API keys. Everything authenticates via your existing AWS identity — SSO session tokens, instance profiles, or the standard credential chain — so there is nothing to rotate or embed in code.
+
+### How it works per SDK
+
+The three SDKs in this repo each need credentials in a slightly different form:
+
+**boto3 / Strands BedrockModel** (files 01, 02, 06–12, 14–20) — native SSO/profile support built in:
+```python
+session = boto3.Session(profile_name=os.environ.get("AWS_PROFILE"))
+```
+boto3 resolves the profile, refreshes SSO tokens automatically when they expire, and handles SigV4 signing on every request.
+
+**`anthropic[bedrock]`** (files 03, 21) — the Anthropic SDK has first-class Bedrock support, accepting a profile name directly:
+```python
+client = AnthropicBedrock(aws_profile=os.environ.get("AWS_PROFILE"))
+```
+It creates its own boto3 session under the hood, so SSO refresh works the same way. File 21 reuses Strands' `AnthropicModel` request/tool formatting and swaps its client to `AsyncAnthropicBedrockMantle`.
+
+**`openai`** (files 04, 05, 13) — the GPT-5.5/5.4 examples use the SDK's `BedrockOpenAI` / `AsyncBedrockOpenAI` clients with refreshable token providers. The OSS example in file 04 still uses `OpenAI(base_url=...)` because those models use the plain `/v1` Mantle path. `auth.py` bridges named profiles / SSO into both patterns without any long-lived key:
+```python
+# auth.py
+session = boto3.Session(profile_name=AWS_PROFILE)
+provider = BotoSessionCredentialsProvider(session)   # adapts boto3 → botocore CredentialProvider
+token = provide_token(region=region, aws_credentials_provider=provider)
+
+# caller
+client = BedrockOpenAI(
+    aws_region="us-east-2",
+    bedrock_token_provider=lambda: get_mantle_token("us-east-2"),
+)
+```
+`aws-bedrock-token-generator` calls the Bedrock token endpoint using your live SigV4 credentials and returns a short-lived bearer token. `BotoSessionCredentialsProvider` is a thin adapter that lets the token generator consume a boto3 session directly, so SSO profiles and instance roles work without any extra config.
+File 22 uses the same token helper through Strands' `OpenAIResponsesModel`, but points the OpenAI client at `/openai/v1` because GPT-5.4 and GPT-5.5 are not served from Mantle's plain `/v1` path.
+
+The result: every request is signed by your current AWS identity. Tokens expire and are minted fresh per run; nothing is stored on disk.
+
+### Quickstart
+
+```bash
+aws sso login --profile my-sso-profile
+export AWS_PROFILE=my-sso-profile
+uv run python 01_hello_fm.py
+```
+
+Leave `AWS_PROFILE` unset to fall back to the default credential chain (`~/.aws/credentials`, instance profile, `AWS_*` environment variables).
+
+### IAM permissions required
+
+| Endpoint | IAM action needed |
+|----------|------------------|
+| `bedrock-runtime` | `bedrock:InvokeModel`, `bedrock:Converse` |
+| `bedrock-agent-runtime` | `bedrock:InvokeAgent` |
+| `bedrock-mantle` | `bedrock-mantle:CreateInference` |
+
+> **Note:** `bedrock-mantle:CreateInference` is a separate IAM action from standard Bedrock permissions — ensure your role has it before using files 03–05, 13, 21, or 22.
+
+## bedrock-mantle path routing
+
+The mantle endpoint uses two different base paths depending on the model:
+
+| Path | Models |
+|------|--------|
+| `https://bedrock-mantle.{region}.api.aws/v1` | OSS models (`openai.gpt-oss-*`), Amazon Nova, and others |
+| `https://bedrock-mantle.{region}.api.aws/openai/v1` | GPT-5.5 and GPT-5.4 only |
+| `https://bedrock-mantle.{region}.api.aws/anthropic` | Claude models (used by `anthropic` SDK internally) |
+
+## Key facts
+
+- **GPT-5.5 / GPT-5.4** (`openai.gpt-5.5`, `openai.gpt-5.4`) — use Bedrock Mantle in `us-east-2`. Supports **Responses API only** (not Chat Completions).
+- **Codex** — OpenAI's coding agent powered by GPT-5.5. Same Responses API, also configurable via Codex CLI/App/VS Code with `model-provider = "amazon-bedrock"` in `~/.codex/config.toml`.
+- **bedrock-mantle** — AWS's newer inference engine (Project Mantle). Supports OpenAI Responses API and Anthropic Messages API. Recommended for new projects using these SDKs.
+- **bedrock-runtime** — Original Bedrock engine. Supports Converse and InvokeModel APIs. All models available here.
+- For `02_hello_agent.py`, create an agent in the Bedrock console first and fill in `AGENT_ID` / `ALIAS_ID`.
+- For `06_hello_strands_agent.py`, create a guardrail in the Bedrock console first, then set `BEDROCK_GUARDRAIL_ID` and optionally `BEDROCK_GUARDRAIL_VERSION` (defaults to `DRAFT`).
+- `07_hello_strands_multiagent.py` runs three agents: `time_agent` (current_time tool), `fetcher_agent` (rss tool), and an orchestrator that calls both and writes a formatted security briefing. No extra config needed — just run it.
+- `08_hello_strands_custom_tool.py` shows the `@tool` decorator: define a Python function with a docstring, and Strands generates the Bedrock tool spec automatically.
+- `09_hello_strands_session.py` shows `FileSessionManager`: session files are written to `./sessions/`. Re-run the script and the agent picks up the previous conversation. Includes `current_time`.
+- `10_hello_strands_swarm.py` shows the `Swarm` class: a triage agent classifies each question and hands off to the right specialist. Strands injects a `handoff_to_agent` tool into every agent in the swarm automatically.
+- `11_hello_strands_streaming.py` runs an interactive CLI chat loop. Includes `current_time` and a `send_email` tool gated behind `handoff_to_user` — the agent pauses and asks for approval; `send_email` only executes after the user confirms. Type `quit` to exit.
+- `12_hello_strands_webui.py` runs a FastAPI server on `http://localhost:8000` with a single-page chat UI. Includes `current_time`. Tokens stream over SSE; `send_email` triggers a Strands `BeforeToolCallEvent` interrupt, the browser shows an Approve / Deny card with the drafted email, and the agent only resumes after the user clicks. Try: *"Email alex@example.com saying the deploy is done."* or *"What time is it?"*
+- `13_cybersec_summary_webui.py` runs a FastAPI server on `http://localhost:8001`. Upload a PDF or enter a URL; text is extracted locally and summarized with GPT-5.5, falling back to GPT-5.4 for known intermittent Mantle failures.
+- `14_cybersec_triage_graph.py` demonstrates Strands `GraphBuilder`: triage, IOC extraction, defensive planning, and final briefing nodes run as a deterministic cyber-analysis graph over a PDF or URL.
+- `15_structured_cybersec_output.py` demonstrates Strands structured output with Pydantic. It returns a validated cyber brief object with severity, confidence, indicators, recommended actions, and open questions.
+- `16_strands_memory_advisor.py` demonstrates durable memory as explicit Strands tools backed by `./sessions/security_memory.json`. The installed Strands SDK does not expose the newer `MemoryManager` constructor surface, so this example keeps memory local and transparent.
+- `17_mcp_repo_tools_agent.py` demonstrates syncing multiple tool families into one agent: native Strands tools, a local stdio MCP repo server, and optional remote MCP tools.
+- `18_voice_incident_briefing.py` demonstrates experimental bidirectional streaming with Amazon Nova Sonic. It requires Python 3.12+, microphone/speaker access, and optional audio dependencies.
+- `19_sandboxed_code_analysis_agent.py` demonstrates Strands `DockerSandbox` by statically inventorying a Python snippet inside a running container. It does not execute the suspicious script.
+- `20_workflow_research_report.py` demonstrates the Strands community `workflow` tool with dependent cyber-research tasks and status reporting.
+- `21_hello_strands_mantle_anthropic.py` demonstrates a small custom Strands model adapter for Bedrock Mantle's Anthropic Messages API. It keeps Strands tools/agent behavior while sending inference through `https://bedrock-mantle.{region}.api.aws/anthropic`.
+- `22_hello_strands_mantle_gpt54.py` demonstrates Strands with GPT-5.4 over Bedrock Mantle's `/openai/v1` Responses API path. It keeps Strands' OpenAI Responses formatting and refreshes the Bedrock bearer token per request.
+
+## Run examples
+
+Most examples run directly once AWS auth is set:
+
+```bash
+uv run python 07_hello_strands_multiagent.py
+uv run python 14_cybersec_triage_graph.py --url https://example.com/report
+uv run python 14_cybersec_triage_graph.py --html ./saved-page.html
+uv run python 15_structured_cybersec_output.py --pdf ./report.pdf
+uv run python 15_structured_cybersec_output.py --text ./article.md
+```
+
+Some publisher sites return HTTP 403 to automated requests even with browser-like headers. For those, open the page in your browser, save it as HTML or PDF, then pass `--html` / `--pdf` to files `14` or `15`. In the web UI (`13`), upload a saved PDF.
+
+Web examples:
+
+```bash
+uv run python 12_hello_strands_webui.py        # http://localhost:8000
+uv run python 13_cybersec_summary_webui.py     # http://localhost:8001
+```
+
+MCP example:
+
+```bash
+uv run python 17_mcp_repo_tools_agent.py
+REMOTE_MCP_URL=http://localhost:8000/mcp uv run python 17_mcp_repo_tools_agent.py
+REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python 17_mcp_repo_tools_agent.py
+```
+
+Sandbox example:
+
+```bash
+docker run --rm -it --name strands-cybersec-sandbox python:3.12-slim sleep infinity
+uv run python 19_sandboxed_code_analysis_agent.py
+```
+
+Voice example:
+
+```bash
+uv add "strands-agents[bidi]"
+uv run python 18_voice_incident_briefing.py
+```
+
+Nova Sonic is available in `us-east-1`, `eu-north-1`, and `ap-northeast-1`. On macOS, PyAudio may also require PortAudio system headers.
