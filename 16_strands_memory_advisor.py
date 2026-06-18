@@ -31,7 +31,7 @@ def _load_memories() -> list[dict[str, str]]:
 
 def _save_memories(memories: list[dict[str, str]]) -> None:
     MEMORY_FILE.parent.mkdir(exist_ok=True)
-    MEMORY_FILE.write_text(json.dumps(memories, indent=2) + "\n")
+    MEMORY_FILE.write_text(json.dumps(memories, indent=2, ensure_ascii=False) + "\n")
 
 
 @tool

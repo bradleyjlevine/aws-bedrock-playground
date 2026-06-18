@@ -161,7 +161,7 @@ def main() -> None:
         structured_output_model=CyberBrief,
     )
 
-    print(json.dumps(result.structured_output.model_dump(), indent=2))
+    print(json.dumps(result.structured_output.model_dump(), indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":
