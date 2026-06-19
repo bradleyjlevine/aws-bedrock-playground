@@ -19,6 +19,7 @@ from strands.models.anthropic import AnthropicModel
 
 REGION = "us-east-1"
 MODEL_ID = "anthropic.claude-haiku-4-5"
+MANTLE_DEFAULT_HEADERS = {"anthropic-workspace": "default"}
 
 
 class AnthropicMantleModel(AnthropicModel):
@@ -29,6 +30,7 @@ class AnthropicMantleModel(AnthropicModel):
         self.client = AsyncAnthropicBedrockMantle(
             aws_region=aws_region,
             aws_profile=aws_profile,
+            default_headers=MANTLE_DEFAULT_HEADERS,
         )
 
 

@@ -15,12 +15,14 @@ logging.basicConfig(level=logging.DEBUG,
 
 REGION = "us-east-1"
 PROFILE = os.environ.get("AWS_PROFILE")
+MANTLE_DEFAULT_HEADERS = {"anthropic-workspace": "default"}
 
 # AnthropicBedrockMantle accepts aws_profile= directly — it builds a boto3.Session
 # internally and signs requests with SigV4 using those credentials.
 client = AnthropicBedrockMantle(
     aws_region=REGION,
     aws_profile=PROFILE,
+    default_headers=MANTLE_DEFAULT_HEADERS,
 )
 
 message = client.messages.create(
