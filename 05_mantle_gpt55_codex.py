@@ -15,7 +15,10 @@ To use Codex CLI instead of this script:
   #   model = "openai.gpt-5.5"
   #   region = "us-east-2"
 """
-import logging
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import sys
 
 from openai import BedrockOpenAI
@@ -31,13 +34,6 @@ REQUEST_TIMEOUT_SECONDS = 45.0
 # Bedrock console's live API examples set this header, and GPT-5.5 routing can
 # require a project context.
 MANTLE_DEFAULT_HEADERS = {"OpenAI-Project": "default"}
-LOGGER = logging.getLogger("bedrock_mantle")
-
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
 
 
 def is_gpt55_outage(exc: BaseException) -> bool:

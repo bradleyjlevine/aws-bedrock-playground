@@ -8,6 +8,10 @@ Run:     uv run python 15_strands_structured_cybersec_brief.py --url https://exa
          uv run python 15_strands_structured_cybersec_brief.py --pdf ./report.pdf
          uv run python 15_strands_structured_cybersec_brief.py --html ./saved-page.html
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import argparse
 import json
 import os

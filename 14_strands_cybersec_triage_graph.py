@@ -9,6 +9,10 @@ Run:     uv run python 14_strands_cybersec_triage_graph.py --url https://example
          uv run python 14_strands_cybersec_triage_graph.py --pdf ./report.pdf
          uv run python 14_strands_cybersec_triage_graph.py --html ./saved-page.html
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import argparse
 import os
 import re

@@ -13,6 +13,10 @@ Optional remote MCP:
   REMOTE_MCP_URL=http://localhost:8000/mcp uv run python 17_strands_mcp_repo_tools_agent.py
   REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python 17_strands_mcp_repo_tools_agent.py
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 import subprocess
 import sys

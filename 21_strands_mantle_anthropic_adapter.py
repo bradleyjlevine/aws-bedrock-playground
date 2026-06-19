@@ -10,6 +10,10 @@ SSO: aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 Run: uv run python 21_strands_mantle_anthropic_adapter.py
 """
 
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
+
 import os
 from typing import Any
 

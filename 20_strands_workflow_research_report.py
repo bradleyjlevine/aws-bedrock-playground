@@ -7,6 +7,10 @@ Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 Run:     uv run python 20_strands_workflow_research_report.py
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 
 import boto3

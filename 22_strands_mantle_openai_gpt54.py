@@ -10,6 +10,10 @@ SSO: aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 Run: uv run python 22_strands_mantle_openai_gpt54.py
 """
 
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
+
 from typing import Any
 
 from strands import Agent

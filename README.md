@@ -176,6 +176,11 @@ uv run python 24_pdf_to_unstructured_elements.py ./report.pdf --pretty --max-ele
 uv run python 25_pdf_elements_to_prompt_chunks.py ./report.pdf --question "Summarize the key risks."
 ```
 
+Each numbered example writes DEBUG logs to `logs/<script-name>.log`. Those logs
+include SDK/request lifecycle details from libraries such as botocore, httpx,
+urllib3, OpenAI, Strands, and Unstructured, which is useful when checking which
+calls are being made. The log files are ignored by Git.
+
 Some publisher sites return HTTP 403 to automated requests even with browser-like headers. For those, open the page in your browser, save it as HTML or PDF, then pass `--html` / `--pdf` to files `14` or `15`. In the web UI (`13`), upload a saved PDF.
 
 Web examples:

@@ -30,6 +30,10 @@ Run:     uv run python 12_strands_webui_sse_hitl.py
 
 Try:     "Email alex@example.com to say the deploy is done."
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import json
 import os
 from typing import Any

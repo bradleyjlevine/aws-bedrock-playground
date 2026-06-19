@@ -7,6 +7,10 @@ Auth: bearer token minted from the boto3 credential chain (respects AWS_PROFILE 
 Install: pip install openai aws-bedrock-token-generator
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 from openai import OpenAI
 from auth import get_mantle_token
 

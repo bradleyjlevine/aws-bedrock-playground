@@ -23,6 +23,10 @@ Run:     uv run python 13_mantle_gpt55_cybersec_webui.py
          Then open http://localhost:8001
 """
 
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
+
 import asyncio
 import json
 from urllib.parse import urlparse
@@ -119,17 +123,45 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+class EmptyModelOutput(RuntimeError):
+    """Raised when Bedrock returns a valid response without assistant text."""
+
+
+def _response_text(response) -> str:
+    output_text = (getattr(response, "output_text", None) or "").strip()
+    if output_text:
+        return output_text
+
+    parts: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            text = getattr(content, "text", None)
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts).strip()
+
+
 async def _run_model(model_id: str, content_blocks: list):
     """Run the summary request, raising on error so the caller can fall back."""
     input_text = "\n\n".join(block["text"] for block in content_blocks)
+    LOGGER.debug(
+        "Calling model=%s input_chars=%s content_blocks=%s",
+        model_id,
+        len(input_text),
+        len(content_blocks),
+    )
     async with _make_client() as client:
         response = await client.responses.create(
             model=model_id,
             instructions=SYSTEM_PROMPT,
             input=input_text,
         )
-    if response.output_text:
-        yield response.output_text
+    text = _response_text(response)
+    LOGGER.debug("Model %s returned output_chars=%s", model_id, len(text))
+    if not text:
+        LOGGER.debug("Empty response object from %s: %r", model_id, response)
+        raise EmptyModelOutput(f"{model_id} returned no assistant text")
+    yield text
 
 
 async def _stream_analysis(content_blocks: list):
@@ -141,7 +173,8 @@ async def _stream_analysis(content_blocks: list):
             streamed_any = True
             yield _sse({"type": "token", "text": text})
     except Exception as exc:
-        if streamed_any or not is_gpt55_outage(exc):
+        can_fallback = isinstance(exc, EmptyModelOutput) or is_gpt55_outage(exc)
+        if streamed_any or not can_fallback:
             yield _sse({"type": "error", "text": str(exc)})
             return
         fallback_reason = str(exc)
@@ -152,8 +185,13 @@ async def _stream_analysis(content_blocks: list):
     if fallback_reason is not None:
         yield _sse({"type": "token", "text": f"[notice] {PRIMARY_MODEL} unavailable ({fallback_reason}); retrying with {FALLBACK_MODEL}.\n\n"})
         try:
+            fallback_streamed = False
             async for text in _run_model(FALLBACK_MODEL, content_blocks):
+                fallback_streamed = True
                 yield _sse({"type": "token", "text": text})
+            if not fallback_streamed:
+                yield _sse({"type": "error", "text": f"{FALLBACK_MODEL} returned no assistant text"})
+                return
         except Exception as exc2:
             yield _sse({"type": "error", "text": str(exc2)})
             return
@@ -254,6 +292,20 @@ async def _stream_request_analysis(files: list[UploadFile], url: str):
         yield event
 
 
+async def _safe_stream_request_analysis(files: list[UploadFile], url: str):
+    sent_done = False
+    try:
+        async for event in _stream_request_analysis(files, url):
+            if '"type": "done"' in event:
+                sent_done = True
+            yield event
+    except Exception as exc:
+        yield _sse({"type": "error", "text": f"Unexpected server error: {exc}"})
+    finally:
+        if not sent_done:
+            yield _sse({"type": "done"})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> str:
     return HTML_PAGE
@@ -265,8 +317,12 @@ async def analyse(
     url: str = Form(default=""),
 ) -> StreamingResponse:
     return StreamingResponse(
-        _stream_request_analysis(files or [], url),
+        _safe_stream_request_analysis(files or [], url),
         media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -529,6 +585,11 @@ clearBtn.addEventListener("click", () => {
 });
 
 analyseBtn.addEventListener("click", async () => {
+  if (window.location.protocol === "file:") {
+    setStatus("Open this app from http://localhost:8001, not as a local file.");
+    return;
+  }
+
   const files = Array.from(fileInput.files || []);
   const urls  = urlInput.value.split(/\\r?\\n/).map(v => v.trim()).filter(Boolean);
 
@@ -547,39 +608,75 @@ analyseBtn.addEventListener("click", async () => {
   if (urls.length) form.append("url", urls.join("\\n"));
 
   try {
-    const resp = await fetch("/analyse", { method: "POST", body: form });
+    let resp;
+    try {
+      resp = await fetch("/analyse", {
+        method: "POST",
+        body: form,
+        headers: { "Accept": "text/event-stream" },
+      });
+    } catch (err) {
+      setStatus("Could not reach the FastAPI server. Make sure 13_mantle_gpt55_cybersec_webui.py is still running on http://localhost:8001.");
+      return;
+    }
+
     if (!resp.ok) {
       setStatus("Server error: " + resp.status);
       setEnabled(true);
+      return;
+    }
+    if (!resp.body) {
+      setStatus("Server did not return a readable response stream.");
       return;
     }
 
     const reader  = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let sawOutput = false;
+    let sawError = false;
 
     while (true) {
-      const { value, done } = await reader.read();
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch (err) {
+        setStatus("Response stream interrupted: " + err.message);
+        return;
+      }
+      const { value, done } = chunk;
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const parts = buffer.split("\\n\\n");
       buffer = parts.pop();
       for (const part of parts) {
         if (!part.startsWith("data: ")) continue;
-        const evt = JSON.parse(part.slice(6));
+        let evt;
+        try {
+          evt = JSON.parse(part.slice(6));
+        } catch (err) {
+          setStatus("Could not parse server event: " + err.message);
+          continue;
+        }
         if (evt.type === "token") {
           setMarkdown(markdownBuffer + evt.text);
+          if ((evt.text || "").trim()) sawOutput = true;
         } else if (evt.type === "status") {
-          setStatus(evt.text);
+          if (!sawError) setStatus(evt.text);
         } else if (evt.type === "error") {
+          sawError = true;
           setStatus("Error: " + evt.text);
         } else if (evt.type === "done") {
-          setStatus("Done.");
+          if (!sawError && sawOutput) {
+            setStatus("Done.");
+          } else if (!sawError) {
+            setStatus("Done, but the model returned no visible output. Check logs/13_mantle_gpt55_cybersec_webui.log.");
+          }
         }
       }
     }
   } catch (err) {
-    setStatus("Network error: " + err.message);
+    setStatus("Browser error: " + err.message);
   } finally {
     setEnabled(true);
   }

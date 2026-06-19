@@ -20,6 +20,10 @@ Try saying:
   "What time is it?"
   "Stop."
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import argparse
 import asyncio
 import os

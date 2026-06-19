@@ -6,12 +6,12 @@ Auth falls back to default credential chain if AWS_PROFILE is not set.
 Install: pip install -U "anthropic[bedrock]"
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 from anthropic import AnthropicBedrockMantle
-import logging
-
-logging.basicConfig(level=logging.DEBUG,
-                    format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 REGION = "us-east-1"
 PROFILE = os.environ.get("AWS_PROFILE")

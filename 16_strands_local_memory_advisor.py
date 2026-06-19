@@ -10,6 +10,10 @@ Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 Run:     uv run python 16_strands_local_memory_advisor.py
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import json
 import os
 from pathlib import Path

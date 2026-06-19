@@ -5,6 +5,10 @@ Endpoint: bedrock-runtime  Auth: SigV4 (boto3 credentials)
 
 SSO: set AWS_PROFILE=your-sso-profile-name before running, or set PROFILE below.
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 import boto3
 from botocore.exceptions import ClientError

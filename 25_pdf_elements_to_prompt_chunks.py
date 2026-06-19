@@ -19,7 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from logging_utils import configure_script_logging
 from unstructured.partition.pdf import partition_pdf
+
+LOGGER = configure_script_logging(__file__)
 
 
 @dataclass

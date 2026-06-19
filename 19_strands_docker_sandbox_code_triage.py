@@ -10,6 +10,10 @@ Then run:
 
 Set STRANDS_SANDBOX_CONTAINER to use a different running container name.
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import asyncio
 import os
 import subprocess

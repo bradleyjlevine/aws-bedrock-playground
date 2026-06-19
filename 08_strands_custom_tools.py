@@ -11,6 +11,10 @@ the Bedrock tool spec automatically — no manual JSON schema required.
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 import boto3
 from strands import Agent, tool

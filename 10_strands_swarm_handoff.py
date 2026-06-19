@@ -13,6 +13,10 @@ until one agent produces a final answer (or max_handoffs is reached).
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 import boto3
 from strands import Agent

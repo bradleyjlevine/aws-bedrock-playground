@@ -9,6 +9,10 @@ user input in conversation history so follow-up turns are not re-blocked.
 Install: pip install strands-agents
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import os
 import sys
 import boto3

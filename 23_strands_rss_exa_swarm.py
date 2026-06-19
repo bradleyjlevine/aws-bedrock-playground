@@ -14,6 +14,10 @@ Exa:     export EXA_API_KEY=...
 Run:     uv run python 23_strands_rss_exa_swarm.py
          uv run python 23_strands_rss_exa_swarm.py --feed https://example.com/feed.xml
 """
+
+from logging_utils import configure_script_logging
+
+LOGGER = configure_script_logging(__file__)
 import argparse
 import os
 import uuid
