@@ -18,22 +18,31 @@ AWS_PROFILE=<profile> uv run python <file>.py  # run with a specific SSO profile
 
 ```
 auth.py                        # shared auth helper — DO NOT modify without reading the note below
-01_hello_fm.py                 # bedrock-runtime, Converse API
-02_hello_agent.py              # bedrock-agent-runtime, InvokeAgent
-03_hello_mantle_anthropic.py   # bedrock-mantle, Anthropic Messages API
-04_hello_mantle_openai.py      # bedrock-mantle /v1, OpenAI Responses API (OSS models)
-05_hello_codex.py              # bedrock-mantle /openai/v1, Codex / GPT-5.5
-06_hello_strands_agent.py      # Strands single agent with Bedrock guardrail
-07_hello_strands_multiagent.py # Strands multi-agent: fetcher + time + orchestrator
-08_hello_strands_custom_tool.py   # Strands @tool decorator
-09_hello_strands_session.py       # Strands FileSessionManager (persistent history)
-10_hello_strands_swarm.py         # Strands Swarm (autonomous handoff)
-11_hello_strands_streaming.py     # Custom callback_handler + CLI chat loop + current_time + HITL (handoff_to_user)
-12_hello_strands_webui.py         # FastAPI + SSE WebUI chat (browser) + current_time + HITL (interrupt hook)
-13_cybersec_summary_webui.py      # FastAPI + SSE WebUI: upload PDF or URL → GPT-5.5 cyber-security summary
-21_hello_strands_mantle_anthropic.py # Strands custom Anthropic adapter over bedrock-mantle /anthropic
-22_hello_strands_mantle_gpt54.py  # Strands OpenAI Responses adapter over bedrock-mantle /openai/v1
-23_hello_strands_rss_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
+01_bedrock_converse_foundation_model.py                 # bedrock-runtime, Converse API
+02_bedrock_invoke_agent.py              # bedrock-agent-runtime, InvokeAgent
+03_mantle_anthropic_messages.py   # bedrock-mantle, Anthropic Messages API
+04_mantle_openai_responses_oss.py      # bedrock-mantle /v1, OpenAI Responses API (OSS models)
+05_mantle_gpt55_codex.py              # bedrock-mantle /openai/v1, Codex / GPT-5.5
+06_strands_bedrock_guardrail_agent.py      # Strands single agent with Bedrock guardrail
+07_strands_multiagent_rss_briefing.py # Strands multi-agent: fetcher + time + orchestrator
+08_strands_custom_tools.py   # Strands @tool decorator
+09_strands_file_session_history.py       # Strands FileSessionManager (persistent history)
+10_strands_swarm_handoff.py         # Strands Swarm (autonomous handoff)
+11_strands_streaming_cli_hitl.py     # Custom callback_handler + CLI chat loop + current_time + HITL (handoff_to_user)
+12_strands_webui_sse_hitl.py         # FastAPI + SSE WebUI chat (browser) + current_time + HITL (interrupt hook)
+13_mantle_gpt55_cybersec_webui.py      # FastAPI + SSE WebUI: upload PDF or URL → GPT-5.5 cyber-security summary
+14_strands_cybersec_triage_graph.py     # Strands Graph: cyber triage over PDF/URL/HTML/text sources
+15_strands_structured_cybersec_brief.py # Strands structured output: validated cyber brief object
+16_strands_local_memory_advisor.py      # Strands tools: local durable memory advisor
+17_strands_mcp_repo_tools_agent.py      # Strands MCP: native + local/remote MCP tools
+18_nova_sonic_voice_incident_briefing.py # Nova Sonic bidirectional voice briefing
+19_strands_docker_sandbox_code_triage.py # Strands DockerSandbox static code triage
+20_strands_workflow_research_report.py  # Strands workflow tool for research reports
+21_strands_mantle_anthropic_adapter.py # Strands custom Anthropic adapter over bedrock-mantle /anthropic
+22_strands_mantle_openai_gpt54.py  # Strands OpenAI Responses adapter over bedrock-mantle /openai/v1
+23_strands_rss_exa_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
+24_pdf_to_unstructured_elements.py # Unstructured OSS: PDF → typed elements JSONL
+25_pdf_elements_to_prompt_chunks.py # Unstructured OSS: elements → source-attributed prompt chunks
 sessions/                      # Created by 09 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
@@ -94,7 +103,7 @@ aws sso login --profile <profile-name>
 | `strands-agents-tools[rss]` | Strands community tools (rss, current_time, handoff_to_user) — files 07, 09, 11, 12 |
 | `prompt-toolkit` | Optional — provides readline-style input for file 11 |
 | `fastapi`, `uvicorn` | WebUI server for files 12, 13 |
-| `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py` |
+| `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py`; direct Unstructured demos in files 24–25 |
 | `pypdf` | Fallback PDF text extraction if Unstructured partitioning is unavailable |
 
 ## What NOT to do
@@ -140,3 +149,33 @@ Don't put `input()` in a tool intended to run server-side. Use the hook + interr
 - Do not hardcode profile names or API keys in source files.
 - Do not use `bedrock-runtime` for GPT-5.5 — it is only available via `bedrock-mantle`.
 - For file 06, `BEDROCK_GUARDRAIL_ID` must be set before running — the placeholder `YOUR_GUARDRAIL_ID` will be rejected by the API. Create a guardrail in the Bedrock console first. `GUARDRAIL_VERSION` defaults to `DRAFT` which is valid for testing; use a numeric version string (e.g. `"1"`) for production.
+
+<!-- gortex:communities:start -->
+<!-- gortex:skills:start -->
+## Community Skills
+
+| Area | Description | Skill |
+|------|-------------|-------|
+| Build Swarm | 37 symbols | `/gortex-build-swarm` |
+| Path | 30 symbols | `/gortex-path` |
+| Parse Args | 22 symbols | `/gortex-parse-args` |
+| Sse | 15 symbols | `/gortex-sse` |
+| Remember Preference | 13 symbols | `/gortex-remember-preference` |
+| Analyse | 13 symbols | `/gortex-analyse` |
+| Pypdf Text From Bytes | 12 symbols | `/gortex-pypdf-text-from-bytes` |
+| Make Remote Mcp Client | 10 symbols | `/gortex-make-remote-mcp-client` |
+| Main | 9 symbols | `/gortex-main` |
+| Urlparse | 8 symbols | `/gortex-urlparse` |
+| Run In Sandbox | 7 symbols | `/gortex-run-in-sandbox` |
+| Exa Web Search | 7 symbols | `/gortex-exa-web-search` |
+| Responses With Fallback | 7 symbols | `/gortex-responses-with-fallback` |
+| Lookup Euvd | 7 symbols | `/gortex-lookup-euvd` |
+| Markdownify 13 Cybersec Summary Webui | 6 symbols | `/gortex-markdownify-13-cybersec-summary-webui` |
+| Register Hooks | 6 symbols | `/gortex-register-hooks` |
+| Init | 6 symbols | `/gortex-init` |
+| Make Local Mcp Client | 6 symbols | `/gortex-make-local-mcp-client` |
+| Summarize Cve Record 14 Cybersec Triage Graph | 6 symbols | `/gortex-summarize-cve-record-14-cybersec-triage-graph` |
+| Auth Get Mantle Token | 5 symbols | `/gortex-auth-get-mantle-token` |
+<!-- gortex:skills:end -->
+
+<!-- gortex:communities:end -->
