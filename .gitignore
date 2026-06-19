@@ -1,9 +1,29 @@
-.venv/
+# Python bytecode and caches.
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local dependency state.
+.venv/
+.python-version
+.uv-cache/
+uv-cache/
+
+# Build/package output.
+build/
+dist/
+*.egg-info/
 
 # Runtime state from examples.
 sessions/
+uploads/
+downloads/
+*.log
 
 # Local environment and secrets.
 .env
@@ -11,6 +31,17 @@ sessions/
 *.pem
 *.key
 *.crt
+
+# Local agent, MCP, and editor config.
+.claude/
+.continue/
+.gemini/
+.gortex/
+.opencode/
+.vscode/
+.mcp.json
+CLAUDE.md
+GEMINI.md
 
 # OS/editor noise.
 .DS_Store
