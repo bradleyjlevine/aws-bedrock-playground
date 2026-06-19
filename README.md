@@ -28,11 +28,34 @@ Hello-world examples for the main AWS Bedrock surfaces, including OpenAI GPT-5.5
 | `20_workflow_research_report.py` | Claude Haiku 4.5 | Strands workflow tool · `bedrock-runtime` | Dependent cyber research workflow with task status |
 | `21_hello_strands_mantle_anthropic.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-mantle /anthropic` | Custom Strands model adapter using `AsyncAnthropicBedrockMantle` |
 | `22_hello_strands_mantle_gpt54.py` | GPT-5.4 | Strands SDK · `bedrock-mantle /openai/v1` | Custom Strands `OpenAIResponsesModel` adapter for GPT-5.4 |
+| `23_hello_strands_rss_swarm.py` | Configured Bedrock model | Strands Swarm · `bedrock-runtime` + Exa MCP | RSS swarm that filters recent feed items, fetches article pages, and can use web search for detail |
 
 ## Setup
 
 ```bash
 uv sync
+```
+
+### Unstructured system dependencies
+
+Files `13`-`15` use Unstructured for PDF extraction. For maximum compatibility,
+install the native tools Unstructured relies on for file detection, PDFs, OCR,
+Office documents, and other document formats:
+
+- [`libmagic-dev`](https://man7.org/linux/man-pages/man3/libmagic.3.html) for filetype detection
+- [`poppler-utils`](https://poppler.freedesktop.org/), [`tesseract-ocr`](https://github.com/tesseract-ocr/tesseract), and `tesseract-lang` for images and PDFs
+- [`libreoffice`](https://www.libreoffice.org/discover/libreoffice/) for Microsoft Office documents
+- [`pandoc`](https://pandoc.org/) for `.epub`, `.odt`, and `.rtf` files
+
+On macOS:
+
+```bash
+brew install \
+  libmagic \
+  poppler \
+  tesseract \
+  libreoffice \
+  pandoc
 ```
 
 ## Authentication
@@ -43,7 +66,7 @@ None of these examples use long-lived API keys. Everything authenticates via you
 
 The three SDKs in this repo each need credentials in a slightly different form:
 
-**boto3 / Strands BedrockModel** (files 01, 02, 06–12, 14–20) — native SSO/profile support built in:
+**boto3 / Strands BedrockModel** (files 01, 02, 06–12, 14–20, 23) — native SSO/profile support built in:
 ```python
 session = boto3.Session(profile_name=os.environ.get("AWS_PROFILE"))
 ```
@@ -117,9 +140,9 @@ The mantle endpoint uses two different base paths depending on the model:
 - `10_hello_strands_swarm.py` shows the `Swarm` class: a triage agent classifies each question and hands off to the right specialist. Strands injects a `handoff_to_agent` tool into every agent in the swarm automatically.
 - `11_hello_strands_streaming.py` runs an interactive CLI chat loop. Includes `current_time` and a `send_email` tool gated behind `handoff_to_user` — the agent pauses and asks for approval; `send_email` only executes after the user confirms. Type `quit` to exit.
 - `12_hello_strands_webui.py` runs a FastAPI server on `http://localhost:8000` with a single-page chat UI. Includes `current_time`. Tokens stream over SSE; `send_email` triggers a Strands `BeforeToolCallEvent` interrupt, the browser shows an Approve / Deny card with the drafted email, and the agent only resumes after the user clicks. Try: *"Email alex@example.com saying the deploy is done."* or *"What time is it?"*
-- `13_cybersec_summary_webui.py` runs a FastAPI server on `http://localhost:8001`. Upload a PDF or enter a URL; text is extracted locally and summarized with GPT-5.5, falling back to GPT-5.4 for known intermittent Mantle failures.
-- `14_cybersec_triage_graph.py` demonstrates Strands `GraphBuilder`: triage, IOC extraction, defensive planning, and final briefing nodes run as a deterministic cyber-analysis graph over a PDF or URL. The IOC extractor can call Shodan CVEDB's `/cve/{cve_id}` and `/euvd/{euvd_id}` endpoints to enrich vulnerabilities with CVSS, EPSS, KEV status, references, affected CPEs/products, and linked CVE data.
-- `15_structured_cybersec_output.py` demonstrates Strands structured output with Pydantic. It returns a validated cyber brief object with severity, confidence, indicators, recommended actions, and open questions, and includes the same CVEDB lookup tools for CVE/EUVD enrichment.
+- `13_cybersec_summary_webui.py` runs a FastAPI server on `http://localhost:8001`. Upload a PDF or enter a URL; PDF text is extracted locally with Unstructured (`partition_pdf`) and summarized with GPT-5.5, falling back to GPT-5.4 for known intermittent Mantle failures.
+- `14_cybersec_triage_graph.py` demonstrates Strands `GraphBuilder`: triage, IOC extraction, defensive planning, and final briefing nodes run as a deterministic cyber-analysis graph over a PDF or URL. PDF text extraction uses shared Unstructured helpers, and the IOC extractor can call Shodan CVEDB's `/cve/{cve_id}` and `/euvd/{euvd_id}` endpoints to enrich vulnerabilities with CVSS, EPSS, KEV status, references, affected CPEs/products, and linked CVE data.
+- `15_structured_cybersec_output.py` demonstrates Strands structured output with Pydantic. It returns a validated cyber brief object with severity, confidence, indicators, recommended actions, and open questions, uses the same Unstructured PDF extraction helper, and includes the same CVEDB lookup tools for CVE/EUVD enrichment.
 - `16_strands_memory_advisor.py` demonstrates durable memory as explicit Strands tools backed by `./sessions/security_memory.json`. The installed Strands SDK does not expose the newer `MemoryManager` constructor surface, so this example keeps memory local and transparent.
 - `17_mcp_repo_tools_agent.py` demonstrates syncing multiple tool families into one agent: native Strands tools, a local stdio MCP repo server, and optional remote MCP tools.
 - `18_voice_incident_briefing.py` demonstrates experimental bidirectional streaming with Amazon Nova Sonic. It requires Python 3.12+, microphone/speaker access, and optional audio dependencies.
@@ -127,6 +150,7 @@ The mantle endpoint uses two different base paths depending on the model:
 - `20_workflow_research_report.py` demonstrates the Strands community `workflow` tool with dependent cyber-research tasks and status reporting.
 - `21_hello_strands_mantle_anthropic.py` demonstrates a small custom Strands model adapter for Bedrock Mantle's Anthropic Messages API. It keeps Strands tools/agent behavior while sending inference through `https://bedrock-mantle.{region}.api.aws/anthropic`.
 - `22_hello_strands_mantle_gpt54.py` demonstrates Strands with GPT-5.4 over Bedrock Mantle's `/openai/v1` Responses API path. It keeps Strands' OpenAI Responses formatting and refreshes the Bedrock bearer token per request.
+- `23_hello_strands_rss_swarm.py` demonstrates a Strands `Swarm` for RSS briefings. A feed collector uses the `rss` tool, an article researcher fetches selected source pages and can use Exa remote MCP web-search tools via `EXA_API_KEY`, and a briefing writer summarizes items from the last 14 days by default.
 
 ## Run examples
 
@@ -135,9 +159,14 @@ Most examples run directly once AWS auth is set:
 ```bash
 uv run python 07_hello_strands_multiagent.py
 uv run python 14_cybersec_triage_graph.py --url https://example.com/report
+uv run python 14_cybersec_triage_graph.py --pdf ./report-a.pdf --pdf ./report-b.pdf --url https://example.com/advisory
 uv run python 14_cybersec_triage_graph.py --html ./saved-page.html
 uv run python 15_structured_cybersec_output.py --pdf ./report.pdf
+uv run python 15_structured_cybersec_output.py --pdf ./report-a.pdf --text ./notes.md --url https://example.com/advisory
 uv run python 15_structured_cybersec_output.py --text ./article.md
+uv run python 23_hello_strands_rss_swarm.py
+EXA_API_KEY=... uv run python 23_hello_strands_rss_swarm.py
+uv run python 23_hello_strands_rss_swarm.py --feed https://example.com/feed.xml --days 14
 ```
 
 Some publisher sites return HTTP 403 to automated requests even with browser-like headers. For those, open the page in your browser, save it as HTML or PDF, then pass `--html` / `--pdf` to files `14` or `15`. In the web UI (`13`), upload a saved PDF.

@@ -4,10 +4,9 @@ Upload a PDF or enter a URL; GPT-5.5 summarizes key changes in the cyber-securit
 landscape and streams the result back to the browser.
 
 PDF handling:
-  Text is extracted from the PDF locally with pypdf, then sent to GPT-5.5 as text.
-  This avoids the Bedrock Mantle request-body size limit that rejects large base64
-  payloads. Images embedded in the PDF are not extracted (pypdf is text-only); for
-  image-heavy reports the text extraction still captures all prose, tables, and captions.
+  Text is extracted from the PDF locally with Unstructured, falling back to pypdf,
+  then sent to GPT-5.5 as text. This avoids the Bedrock Mantle request-body size
+  limit that rejects large base64 payloads.
 
 Webpage handling:
   The URL is fetched with requests and converted to clean markdown with markdownify,
@@ -24,12 +23,11 @@ Run:     uv run python 13_cybersec_summary_webui.py
          Then open http://localhost:8001
 """
 
-import io
+import asyncio
 import json
 from urllib.parse import urlparse
 
 import markdownify
-import pypdf
 import requests as _requests
 import uvicorn
 from bs4 import BeautifulSoup
@@ -38,6 +36,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from openai import AsyncBedrockOpenAI
 
 from auth import get_mantle_token
+from pdf_utils import extract_pdf_text_from_bytes
 
 REGION = "us-east-2"  # GPT-5.5 / GPT-5.4 both available in us-east-2 (Ohio)
 PRIMARY_MODEL = "openai.gpt-5.5"
@@ -100,11 +99,12 @@ SYSTEM_PROMPT = (
     "You are a cyber-security analyst. "
     "When given a document or webpage extract, summarize the KEY CHANGES and NOTABLE "
     "DEVELOPMENTS in the cyber-security landscape it describes. "
-    "Structure your response as:\n"
-    "1. **Executive Summary** — 2-4 sentences\n"
-    "2. **Key Threat Trends** — bulleted list\n"
-    "3. **Notable Vulnerabilities / Incidents** — bulleted list (include CVE IDs if present)\n"
-    "4. **Defensive Recommendations** — bulleted list\n"
+    "Write clean Markdown with these exact headings:\n"
+    "## Executive Summary\n"
+    "## Key Threat Trends\n"
+    "## Notable Vulnerabilities / Incidents\n"
+    "## Defensive Recommendations\n"
+    "Use short paragraphs and grouped bullets. Do not number the section headings. "
     "Be concise and use plain language."
 )
 
@@ -160,59 +160,60 @@ async def _stream_analysis(content_blocks: list):
     yield _sse({"type": "done"})
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return HTML_PAGE
-
-
-@app.post("/analyse")
-async def analyse(
-    file: UploadFile = File(default=None),
-    url: str = Form(default=""),
-) -> StreamingResponse:
+async def _stream_request_analysis(files: list[UploadFile], url: str):
+    """Extract all requested sources inside the SSE stream so progress is visible."""
     content_blocks: list = []
+    source_count = 0
+    named_files = [file for file in files if file.filename]
+    urls = [line.strip() for line in url.splitlines() if line.strip()]
+    total_sources = len(named_files) + len(urls)
 
-    if file and file.filename:
+    if total_sources == 0:
+        yield _sse({"type": "error", "text": "Please upload at least one PDF or enter at least one URL."})
+        return
+
+    yield _sse({"type": "status", "text": f"Preparing {total_sources} source(s)."})
+
+    for index, file in enumerate(named_files, start=1):
+        yield _sse({"type": "status", "text": f"Reading PDF {index}/{len(named_files)}: {file.filename}"})
         pdf_bytes = await file.read()
         if not pdf_bytes:
-            return StreamingResponse(
-                iter([_sse({"type": "error", "text": "Uploaded file is empty."})]),
-                media_type="text/event-stream",
-            )
-        # Extract text locally with pypdf — avoids Bedrock Mantle's request-body size
-        # limit that rejects large base64-encoded PDF payloads.
+            yield _sse({"type": "error", "text": f"Uploaded file is empty: {file.filename}"})
+            return
+
+        yield _sse({"type": "status", "text": f"Extracting PDF {index}/{len(named_files)}: {file.filename}"})
         try:
-            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-            pages = [page.extract_text() or "" for page in reader.pages]
-            pdf_text = "\n\n".join(pages).strip()
+            pdf_text = await asyncio.to_thread(extract_pdf_text_from_bytes, pdf_bytes)
         except Exception as exc:
-            return StreamingResponse(
-                iter([_sse({"type": "error", "text": f"Could not read PDF: {exc}"})]),
-                media_type="text/event-stream",
-            )
+            yield _sse({"type": "error", "text": f"Could not read PDF '{file.filename}': {exc}"})
+            return
+
         if not pdf_text:
-            return StreamingResponse(
-                iter([_sse({"type": "error", "text": "No text could be extracted from this PDF (may be image-only)."})]),
-                media_type="text/event-stream",
-            )
-        # Trim to ~120k chars; a 200-page report easily exceeds GPT-5.5's context otherwise.
+            yield _sse({"type": "error", "text": f"No text could be extracted from '{file.filename}'."})
+            return
+
         pdf_text = pdf_text[:120_000]
+        source_count += 1
         content_blocks.append(
             {
                 "text": (
-                    f"The following is the extracted text of '{file.filename}':\n\n"
+                    f"## Source {source_count}: PDF - {file.filename}\n\n"
                     f"{pdf_text}\n\n"
-                    "Please summarize the key cyber-security changes described in the document above."
                 )
             }
         )
+        yield _sse({"type": "status", "text": f"Extracted PDF {index}/{len(named_files)}: {file.filename}"})
 
-    elif url.strip():
-        try:
-            resp = _requests.get(url.strip(), timeout=25, headers=_url_fetch_headers(url.strip()))
+    for index, source_url in enumerate(urls, start=1):
+        yield _sse({"type": "status", "text": f"Fetching URL {index}/{len(urls)}: {source_url}"})
+
+        def fetch_markdown() -> str:
+            resp = _requests.get(source_url, timeout=25, headers=_url_fetch_headers(source_url))
             resp.raise_for_status()
-            md_text = _html_to_markdown(resp.text)
-            # Trim to ~100k chars to avoid overwhelming the context window
+            return _html_to_markdown(resp.text)
+
+        try:
+            md_text = await asyncio.to_thread(fetch_markdown)
             md_text = md_text[:100_000]
         except _requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 403:
@@ -223,33 +224,48 @@ async def analyse(
                 )
             else:
                 message = f"Could not fetch URL: {exc}"
-            return StreamingResponse(
-                iter([_sse({"type": "error", "text": message})]),
-                media_type="text/event-stream",
-            )
+            yield _sse({"type": "error", "text": message})
+            return
         except Exception as exc:
-            return StreamingResponse(
-                iter([_sse({"type": "error", "text": f"Could not fetch URL: {exc}"})]),
-                media_type="text/event-stream",
-            )
+            yield _sse({"type": "error", "text": f"Could not fetch URL: {exc}"})
+            return
+
+        source_count += 1
         content_blocks.append(
             {
                 "text": (
-                    f"The following is the content of {url.strip()} converted to markdown:\n\n"
+                    f"## Source {source_count}: URL - {source_url}\n\n"
                     f"{md_text}\n\n"
-                    "Please summarize the key cyber-security changes described above."
                 )
             }
         )
 
-    else:
-        return StreamingResponse(
-            iter([_sse({"type": "error", "text": "Please upload a PDF or enter a URL."})]),
-            media_type="text/event-stream",
-        )
+    content_blocks.append(
+        {
+            "text": (
+                "Analyze all sources together. Keep source attribution clear by referring "
+                "to source names or URLs when discussing specific facts."
+            )
+        }
+    )
 
+    yield _sse({"type": "status", "text": "Running model analysis."})
+    async for event in _stream_analysis(content_blocks):
+        yield event
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> str:
+    return HTML_PAGE
+
+
+@app.post("/analyse")
+async def analyse(
+    files: list[UploadFile] | None = File(default=None),
+    url: str = Form(default=""),
+) -> StreamingResponse:
     return StreamingResponse(
-        _stream_analysis(content_blocks),
+        _stream_request_analysis(files or [], url),
         media_type="text/event-stream",
     )
 
@@ -268,24 +284,28 @@ HTML_PAGE = """\
     *, *::before, *::after { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      max-width: 820px; margin: 2rem auto; padding: 0 1.25rem; color: #1d1d1f;
+      max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1d1d1f;
       background: #f5f5f7;
     }
-    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; letter-spacing: 0; }
     .subtitle { color: #6e6e73; font-size: 0.9rem; margin-bottom: 1.5rem; }
     .card {
-      background: #fff; border: 1px solid #d2d2d7; border-radius: 12px;
+      background: #fff; border: 1px solid #d2d2d7; border-radius: 8px;
       padding: 1.25rem; margin-bottom: 1rem;
     }
-    label { display: block; font-weight: 600; margin-bottom: 0.4rem; }
-    input[type="text"], input[type="file"] {
+    .input-grid { display: grid; gap: 1rem; }
+    label { display: block; font-weight: 700; margin-bottom: 0.4rem; font-size: 0.9rem; }
+    input[type="file"], textarea {
       width: 100%; padding: 0.55rem 0.75rem; border: 1px solid #d2d2d7;
       border-radius: 8px; font: inherit; background: #fafafa;
     }
-    .divider { text-align: center; color: #8e8e93; margin: 0.75rem 0; font-size: 0.85rem; }
-    .actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
+    textarea {
+      min-height: 5rem; resize: vertical;
+    }
+    .divider { text-align: center; color: #8e8e93; font-size: 0.8rem; }
+    .actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
     button {
-      padding: 0.6rem 1.4rem; border: 0; border-radius: 8px;
+      padding: 0.6rem 1.2rem; border: 0; border-radius: 8px;
       background: #0066cc; color: #fff; font: inherit; font-weight: 600;
       cursor: pointer; flex-shrink: 0;
     }
@@ -293,20 +313,29 @@ HTML_PAGE = """\
     button.secondary {
       background: #f2f2f7; color: #1d1d1f; border: 1px solid #d2d2d7;
     }
+    .result-card { padding: 0; overflow: hidden; }
+    .result-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      padding: 0.9rem 1.25rem; border-bottom: 1px solid #e5e5ea; background: #fbfbfd;
+    }
+    .result-title { font-weight: 700; }
+    #source-meta { color: #6e6e73; font-size: 0.85rem; overflow-wrap: anywhere; }
     #output {
-      min-height: 120px; line-height: 1.6;
+      min-height: 120px; line-height: 1.6; padding: 1.25rem;
       font-size: 0.95rem;
     }
     #output:empty::before { content: "Result will appear here…"; color: #8e8e93; }
     #output h1, #output h2, #output h3, #output h4, #output h5, #output h6 {
-      margin: 1.1rem 0 0.45rem; line-height: 1.25;
+      margin: 1.4rem 0 0.55rem; line-height: 1.25; letter-spacing: 0;
+      padding-top: 0.85rem; border-top: 1px solid #ececf1;
     }
+    #output h1:first-child, #output h2:first-child, #output h3:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
     #output h1 { font-size: 1.35rem; }
-    #output h2 { font-size: 1.2rem; }
-    #output h3 { font-size: 1.05rem; }
+    #output h2 { font-size: 1.12rem; }
+    #output h3 { font-size: 1rem; }
     #output p { margin: 0.45rem 0 0.85rem; }
     #output ul, #output ol { margin: 0.35rem 0 1rem; padding-left: 1.5rem; }
-    #output li { margin: 0.25rem 0; }
+    #output li { margin: 0.35rem 0; }
     #output code {
       background: #f2f2f7; border: 1px solid #e5e5ea; border-radius: 4px;
       padding: 0.05rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -318,7 +347,12 @@ HTML_PAGE = """\
     }
     #output pre code { background: transparent; border: 0; padding: 0; }
     .spinner { display: inline-block; margin-right: 0.5rem; }
-    #status { color: #6e6e73; font-size: 0.85rem; margin-top: 0.5rem; min-height: 1.2em; }
+    #status { color: #6e6e73; font-size: 0.85rem; min-height: 1.2em; }
+    @media (max-width: 640px) {
+      body { margin: 1rem auto; padding: 0 0.75rem; }
+      .actions, .result-header { align-items: stretch; flex-direction: column; }
+      button { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -326,19 +360,29 @@ HTML_PAGE = """\
   <p class="subtitle">Powered by GPT-5.5 (with GPT-5.4 fallback) on AWS Bedrock Mantle</p>
 
   <div class="card">
-    <label for="file-input">Upload a PDF</label>
-    <input type="file" id="file-input" accept=".pdf">
-    <div class="divider">— or —</div>
-    <label for="url-input">Enter a webpage URL</label>
-    <input type="text" id="url-input" placeholder="https://nvd.nist.gov/…">
+    <div class="input-grid">
+      <div>
+        <label for="file-input">Upload PDFs</label>
+        <input type="file" id="file-input" accept=".pdf" multiple>
+      </div>
+      <div class="divider">— or —</div>
+      <div>
+        <label for="url-input">Enter webpage URLs</label>
+        <textarea id="url-input" placeholder="https://nvd.nist.gov/…&#10;https://example.com/report"></textarea>
+      </div>
+    </div>
     <div class="actions">
       <button id="analyse-btn">Analyse</button>
       <button id="clear-btn" class="secondary">Clear</button>
+      <div id="status"></div>
     </div>
-    <div id="status"></div>
   </div>
 
-  <div class="card">
+  <div class="card result-card">
+    <div class="result-header">
+      <div class="result-title">Analysis</div>
+      <div id="source-meta"></div>
+    </div>
     <div id="output"></div>
   </div>
 
@@ -349,6 +393,7 @@ const analyseBtn   = document.getElementById("analyse-btn");
 const clearBtn     = document.getElementById("clear-btn");
 const output       = document.getElementById("output");
 const status       = document.getElementById("status");
+const sourceMeta   = document.getElementById("source-meta");
 let markdownBuffer = "";
 
 function setStatus(msg) { status.textContent = msg; }
@@ -464,29 +509,42 @@ function setMarkdown(markdown) {
   output.innerHTML = renderMarkdown(markdownBuffer);
 }
 
+function setSourceMeta(files, urls) {
+  const names = [];
+  for (const file of files || []) names.push(file.name);
+  for (const item of urls || []) names.push(item);
+  if (names.length) {
+    sourceMeta.textContent = names.join(" · ");
+  } else {
+    sourceMeta.textContent = "";
+  }
+}
+
 clearBtn.addEventListener("click", () => {
   fileInput.value = "";
   urlInput.value  = "";
   setMarkdown("");
+  setSourceMeta([], []);
   setStatus("");
 });
 
 analyseBtn.addEventListener("click", async () => {
-  const file = fileInput.files && fileInput.files[0];
-  const url  = urlInput.value.trim();
+  const files = Array.from(fileInput.files || []);
+  const urls  = urlInput.value.split(/\\r?\\n/).map(v => v.trim()).filter(Boolean);
 
-  if (!file && !url) {
-    setStatus("Please upload a PDF or enter a URL.");
+  if (!files.length && !urls.length) {
+    setStatus("Please upload at least one PDF or enter at least one URL.");
     return;
   }
 
   setMarkdown("");
+  setSourceMeta(files, urls);
   setEnabled(false);
   setStatus("Analysing…");
 
   const form = new FormData();
-  if (file) form.append("file", file);
-  if (url)  form.append("url", url);
+  for (const file of files) form.append("files", file);
+  if (urls.length) form.append("url", urls.join("\\n"));
 
   try {
     const resp = await fetch("/analyse", { method: "POST", body: form });
@@ -511,6 +569,8 @@ analyseBtn.addEventListener("click", async () => {
         const evt = JSON.parse(part.slice(6));
         if (evt.type === "token") {
           setMarkdown(markdownBuffer + evt.text);
+        } else if (evt.type === "status") {
+          setStatus(evt.text);
         } else if (evt.type === "error") {
           setStatus("Error: " + evt.text);
         } else if (evt.type === "done") {

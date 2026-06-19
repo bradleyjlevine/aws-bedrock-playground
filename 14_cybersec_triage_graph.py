@@ -10,7 +10,6 @@ Run:     uv run python 14_cybersec_triage_graph.py --url https://example.com/rep
          uv run python 14_cybersec_triage_graph.py --html ./saved-page.html
 """
 import argparse
-import io
 import os
 import re
 from pathlib import Path
@@ -19,12 +18,13 @@ from urllib.parse import urlparse
 
 import boto3
 import markdownify
-import pypdf
 import requests
 from bs4 import BeautifulSoup
 from strands import Agent, tool
 from strands.models import BedrockModel
 from strands.multiagent import GraphBuilder
+
+from pdf_utils import extract_pdf_text_from_path
 
 REGION = "us-east-1"
 MODEL_ID = "openai.gpt-oss-120b-1:0"
@@ -167,16 +167,61 @@ def html_to_markdown(html: str) -> str:
     return markdownify.markdownify(str(soup), heading_style="ATX").strip()
 
 
+def load_one_source(kind: str, value: str, index: int) -> str:
+    label = f"Source {index}: {kind} - {value}"
+    if kind == "PDF":
+        text = extract_pdf_text_from_path(value)
+        if not text:
+            raise ValueError(f"No text could be extracted from the PDF: {value}")
+        return f"{label}\n\n{text[:MAX_CHARS]}"
+
+    if kind == "HTML":
+        html = Path(value).read_text(errors="replace")
+        text = html_to_markdown(html)
+        return f"{label}\n\n{text[:MAX_CHARS]}"
+
+    if kind == "TEXT":
+        text = Path(value).read_text(errors="replace")
+        return f"{label}\n\n{text[:MAX_CHARS]}"
+
+    if kind == "URL":
+        text = fetch_url_markdown(value)
+        return f"{label}\n\n{text[:MAX_CHARS]}"
+
+    raise ValueError(f"Unsupported source kind: {kind}")
+
+
+def load_sources(
+    pdf_paths: list[str] | None,
+    urls: list[str] | None,
+    html_paths: list[str] | None,
+    text_paths: list[str] | None,
+) -> str:
+    source_specs: list[tuple[str, str]] = []
+    source_specs.extend(("PDF", path) for path in pdf_paths or [])
+    source_specs.extend(("URL", item) for item in urls or [])
+    source_specs.extend(("HTML", path) for path in html_paths or [])
+    source_specs.extend(("TEXT", path) for path in text_paths or [])
+
+    if not source_specs:
+        raise ValueError("Pass --pdf, --url, --html, or --text at least once.")
+
+    sections = [
+        load_one_source(kind, value, index)
+        for index, (kind, value) in enumerate(source_specs, start=1)
+    ]
+    return "\n\n---\n\n".join(sections)
+
+
 def load_source(
     pdf_path: str | None,
     url: str | None,
     html_path: str | None,
     text_path: str | None,
 ) -> str:
+    """Backward-compatible single-source loader."""
     if pdf_path:
-        with open(pdf_path, "rb") as f:
-            reader = pypdf.PdfReader(io.BytesIO(f.read()))
-        text = "\n\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        text = extract_pdf_text_from_path(pdf_path)
         if not text:
             raise ValueError("No text could be extracted from the PDF.")
         return f"Source: {pdf_path}\n\n{text[:MAX_CHARS]}"
@@ -270,17 +315,18 @@ def build_graph():
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--pdf", help="Path to a PDF report.")
-    parser.add_argument("--url", help="URL to fetch and analyze.")
-    parser.add_argument("--html", help="Path to a saved HTML page to analyze.")
-    parser.add_argument("--text", help="Path to a plain text or markdown file to analyze.")
+    parser.add_argument("--pdf", action="append", help="Path to a PDF report. Repeat for multiple PDFs.")
+    parser.add_argument("--url", action="append", help="URL to fetch and analyze. Repeat for multiple URLs.")
+    parser.add_argument("--html", action="append", help="Path to a saved HTML page. Repeat for multiple files.")
+    parser.add_argument("--text", action="append", help="Path to a text/markdown file. Repeat for multiple files.")
     args = parser.parse_args()
 
-    source = load_source(args.pdf, args.url, args.html, args.text)
+    source = load_sources(args.pdf, args.url, args.html, args.text)
     graph = build_graph()
     result = graph(
-        "Analyze this cyber-security source through the triage graph. "
-        "Preserve concrete facts and cite source phrases when possible.\n\n"
+        "Analyze these cyber-security sources together through the triage graph. "
+        "Preserve concrete facts and cite source names, source URLs, or short source "
+        "phrases when possible.\n\n"
         f"{source}"
     )
 

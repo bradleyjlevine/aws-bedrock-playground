@@ -33,6 +33,7 @@ auth.py                        # shared auth helper — DO NOT modify without re
 13_cybersec_summary_webui.py      # FastAPI + SSE WebUI: upload PDF or URL → GPT-5.5 cyber-security summary
 21_hello_strands_mantle_anthropic.py # Strands custom Anthropic adapter over bedrock-mantle /anthropic
 22_hello_strands_mantle_gpt54.py  # Strands OpenAI Responses adapter over bedrock-mantle /openai/v1
+23_hello_strands_rss_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
 sessions/                      # Created by 09 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
@@ -93,6 +94,8 @@ aws sso login --profile <profile-name>
 | `strands-agents-tools[rss]` | Strands community tools (rss, current_time, handoff_to_user) — files 07, 09, 11, 12 |
 | `prompt-toolkit` | Optional — provides readline-style input for file 11 |
 | `fastapi`, `uvicorn` | WebUI server for files 12, 13 |
+| `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py` |
+| `pypdf` | Fallback PDF text extraction if Unstructured partitioning is unavailable |
 
 ## What NOT to do
 
