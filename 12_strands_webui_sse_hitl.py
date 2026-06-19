@@ -25,7 +25,7 @@ HITL mechanism:
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 12_hello_strands_webui.py
+Run:     uv run python 12_strands_webui_sse_hitl.py
          Then open http://localhost:8000
 
 Try:     "Email alex@example.com to say the deploy is done."

@@ -4,9 +4,9 @@ Extracts a PDF or URL into a validated Pydantic object instead of free-form text
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 15_structured_cybersec_output.py --url https://example.com/report
-         uv run python 15_structured_cybersec_output.py --pdf ./report.pdf
-         uv run python 15_structured_cybersec_output.py --html ./saved-page.html
+Run:     uv run python 15_strands_structured_cybersec_brief.py --url https://example.com/report
+         uv run python 15_strands_structured_cybersec_brief.py --pdf ./report.pdf
+         uv run python 15_strands_structured_cybersec_brief.py --html ./saved-page.html
 """
 import argparse
 import json

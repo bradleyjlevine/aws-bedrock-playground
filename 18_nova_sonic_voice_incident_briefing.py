@@ -6,10 +6,10 @@ Requires Python 3.12+, microphone/speaker access, and bidirectional extras:
   uv add "strands-agents[bidi]"
 
 SSO: aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run: uv run python 18_voice_incident_briefing.py
-     uv run python 18_voice_incident_briefing.py --list-devices
-     uv run python 18_voice_incident_briefing.py --text-output-only
-     uv run python 18_voice_incident_briefing.py --input-device 1 --output-device 2
+Run: uv run python 18_nova_sonic_voice_incident_briefing.py
+     uv run python 18_nova_sonic_voice_incident_briefing.py --list-devices
+     uv run python 18_nova_sonic_voice_incident_briefing.py --text-output-only
+     uv run python 18_nova_sonic_voice_incident_briefing.py --input-device 1 --output-device 2
 
 Important: BidiAudioIO uses PyAudio, which does not provide echo cancellation.
 Use headphones/headset audio. If the Mac speakers play the assistant response

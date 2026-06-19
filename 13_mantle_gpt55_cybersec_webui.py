@@ -19,7 +19,7 @@ Architecture:
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 13_cybersec_summary_webui.py
+Run:     uv run python 13_mantle_gpt55_cybersec_webui.py
          Then open http://localhost:8001
 """
 

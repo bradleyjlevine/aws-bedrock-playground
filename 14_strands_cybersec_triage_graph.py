@@ -5,9 +5,9 @@ Runs a deterministic multi-agent graph over a PDF or URL:
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 14_cybersec_triage_graph.py --url https://example.com/report
-         uv run python 14_cybersec_triage_graph.py --pdf ./report.pdf
-         uv run python 14_cybersec_triage_graph.py --html ./saved-page.html
+Run:     uv run python 14_strands_cybersec_triage_graph.py --url https://example.com/report
+         uv run python 14_strands_cybersec_triage_graph.py --pdf ./report.pdf
+         uv run python 14_strands_cybersec_triage_graph.py --html ./saved-page.html
 """
 import argparse
 import os

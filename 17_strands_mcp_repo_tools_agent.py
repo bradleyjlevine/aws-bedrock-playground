@@ -6,12 +6,12 @@ Strands tools.
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 17_mcp_repo_tools_agent.py
-Server:  uv run python 17_mcp_repo_tools_agent.py --server
+Run:     uv run python 17_strands_mcp_repo_tools_agent.py
+Server:  uv run python 17_strands_mcp_repo_tools_agent.py --server
 
 Optional remote MCP:
-  REMOTE_MCP_URL=http://localhost:8000/mcp uv run python 17_mcp_repo_tools_agent.py
-  REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python 17_mcp_repo_tools_agent.py
+  REMOTE_MCP_URL=http://localhost:8000/mcp uv run python 17_strands_mcp_repo_tools_agent.py
+  REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python 17_strands_mcp_repo_tools_agent.py
 """
 import os
 import subprocess

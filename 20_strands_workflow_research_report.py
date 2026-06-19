@@ -5,7 +5,7 @@ and inspect workflow status.
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 20_workflow_research_report.py
+Run:     uv run python 20_strands_workflow_research_report.py
 """
 import os
 
