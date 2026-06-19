@@ -99,6 +99,9 @@ aws sso login --profile <profile-name>
 ### Strands @tool decorator (file 08)
 The decorator reads the function's type annotations and docstring to build the Bedrock tool spec automatically. The docstring must have an `Args:` section for each parameter and a `Returns:` section.
 
+### Vulnerability lookup tools (files 14, 15)
+Files 14 and 15 define `lookup_cve` and `lookup_euvd` Strands tools backed by Shodan CVEDB's `/cve/{cve_id}` and `/euvd/{euvd_id}` endpoints. Keep the output bounded; references and CPEs are intentionally capped before returning to the model.
+
 ### Strands FileSessionManager (file 09)
 Pass `session_manager=` and `agent_id=` to `Agent`. The session files land under `storage_dir/session_<session_id>/agents/agent_<agent_id>/messages/`. The directory persists between runs; delete it to start fresh.
 

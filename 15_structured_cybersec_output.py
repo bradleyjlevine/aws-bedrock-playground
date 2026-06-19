@@ -12,7 +12,9 @@ import argparse
 import io
 import json
 import os
+import re
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import boto3
@@ -21,7 +23,7 @@ import pypdf
 import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
-from strands import Agent
+from strands import Agent, tool
 from strands.models import BedrockModel
 
 REGION = "us-east-1"
@@ -39,17 +41,127 @@ BROWSER_HEADERS = {
     "Pragma": "no-cache",
     "Upgrade-Insecure-Requests": "1",
 }
+CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+EUVD_ID_RE = re.compile(r"^EUVD-\d{4}-\d{4,}$", re.IGNORECASE)
+CVEDB_BASE_URL = "https://cvedb.shodan.io"
+
+
+def summarize_cve_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "cve_id": record.get("cve_id"),
+        "summary": record.get("summary"),
+        "cvss": record.get("cvss"),
+        "cvss_version": record.get("cvss_version"),
+        "epss": record.get("epss"),
+        "ranking_epss": record.get("ranking_epss"),
+        "kev": record.get("kev"),
+        "ransomware_campaign": record.get("ransomware_campaign"),
+        "published_time": record.get("published_time"),
+        "propose_action": record.get("propose_action"),
+        "references": (record.get("references") or [])[:5],
+        "cpes": (record.get("cpes") or [])[:10],
+    }
+
+
+def summarize_euvd_record(record: dict[str, Any]) -> dict[str, Any]:
+    cve = record.get("cve") or {}
+    return {
+        "euvd_id": record.get("euvd_id"),
+        "description": record.get("description"),
+        "cvss": record.get("cvss"),
+        "cvss_version": record.get("cvss_version"),
+        "epss": record.get("epss"),
+        "published_time": record.get("published_time"),
+        "assigner": record.get("assigner"),
+        "vendors": record.get("vendors") or [],
+        "products": record.get("products") or [],
+        "references": (record.get("references") or [])[:5],
+        "linked_cve": {
+            "cve_id": cve.get("id"),
+            "summary": cve.get("summary"),
+            "cvss": cve.get("cvss"),
+            "epss": cve.get("epss"),
+            "kev": cve.get("kev"),
+            "references": (cve.get("references") or [])[:5],
+        } if cve else None,
+    }
+
+
+@tool
+def lookup_cve(cve_id: str) -> dict[str, Any]:
+    """Look up CVE details from Shodan CVEDB.
+
+    Args:
+        cve_id: CVE identifier in CVE-YYYY-NNNN format.
+
+    Returns:
+        Selected CVE details including summary, CVSS, EPSS, KEV status, references, and CPEs.
+    """
+    normalized = cve_id.strip().upper()
+    if not CVE_ID_RE.match(normalized):
+        return {"error": f"Invalid CVE ID: {cve_id}"}
+
+    try:
+        response = requests.get(f"{CVEDB_BASE_URL}/cve/{normalized}", timeout=15)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {"cve_id": normalized, "error": str(exc)}
+
+    return summarize_cve_record(response.json())
+
+
+@tool
+def lookup_euvd(euvd_id: str) -> dict[str, Any]:
+    """Look up EUVD details from Shodan CVEDB.
+
+    Args:
+        euvd_id: EUVD identifier in EUVD-YYYY-NNNN format.
+
+    Returns:
+        Selected EUVD details including description, CVSS, EPSS, references, affected products, and linked CVE data.
+    """
+    normalized = euvd_id.strip().upper()
+    if not EUVD_ID_RE.match(normalized):
+        return {"error": f"Invalid EUVD ID: {euvd_id}"}
+
+    try:
+        response = requests.get(f"{CVEDB_BASE_URL}/euvd/{normalized}", timeout=15)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {"euvd_id": normalized, "error": str(exc)}
+
+    return summarize_euvd_record(response.json())
+
+
+class VulnerabilityDetails(BaseModel):
+    """Optional enrichment for CVE or EUVD indicators."""
+
+    summary: str | None = Field(description="CVEDB summary or EUVD description")
+    cvss: float | None = Field(description="CVSS score from CVEDB, if available")
+    cvss_version: float | str | None = Field(description="CVSS version from CVEDB, if available")
+    epss: float | None = Field(description="EPSS probability from CVEDB, if available")
+    kev: bool | None = Field(description="Whether the linked CVE is known exploited, if available")
+    published_time: str | None = Field(description="Published timestamp from CVEDB, if available")
+    linked_cve_id: str | None = Field(description="Linked CVE ID for EUVD records, if present")
+    references: list[str] = Field(description="Up to five supporting references from CVEDB")
+    affected_cpes_or_products: list[str] = Field(description="Affected CPEs, products, or vendors from CVEDB")
 
 
 class CyberIndicator(BaseModel):
     """Concrete indicator or named security artifact from the source."""
 
-    kind: str = Field(description="Type, e.g. CVE, domain, IP, hash, malware, actor, product")
+    kind: str = Field(description="Type, e.g. CVE, EUVD, domain, IP, hash, malware, actor, product")
     cwe: str | None = Field(description=("IF kind = CVE THEN CWE (Common Weakness Enumeration),"
                                   " e.x CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
                                   "ELSE None"))
     value: str = Field(description="Exact indicator value or name")
     context: str = Field(description="Short explanation of why it matters")
+    vulnerability_details: VulnerabilityDetails | None = Field(
+        description=(
+            "For CVE or EUVD indicators, details from lookup_cve or lookup_euvd. "
+            "Use null for non-vulnerability indicators or when lookup fails."
+        )
+    )
 
 
 class CyberAction(BaseModel):
@@ -83,8 +195,13 @@ def make_agent() -> Agent:
         model=model,
         system_prompt=(
             "You are a cyber-security analyst. Extract only facts supported by the "
-            "source. If evidence is thin, lower confidence and add open questions."
+            "source. Use lookup_cve for CVE IDs and lookup_euvd for EUVD IDs when "
+            "present so CVSS, EPSS, KEV status, linked CVEs, and recommendations can "
+            "be grounded in current vulnerability data. Add successful lookup results "
+            "to each matching indicator's vulnerability_details field. "
+            "If evidence is thin, lower confidence and add open questions."
         ),
+        tools=[lookup_cve, lookup_euvd],
         callback_handler=None,
     )
 

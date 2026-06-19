@@ -12,6 +12,7 @@ Run:     uv run python 14_cybersec_triage_graph.py --url https://example.com/rep
 import argparse
 import io
 import os
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -21,7 +22,7 @@ import markdownify
 import pypdf
 import requests
 from bs4 import BeautifulSoup
-from strands import Agent
+from strands import Agent, tool
 from strands.models import BedrockModel
 from strands.multiagent import GraphBuilder
 
@@ -40,6 +41,96 @@ BROWSER_HEADERS = {
     "Pragma": "no-cache",
     "Upgrade-Insecure-Requests": "1",
 }
+CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+EUVD_ID_RE = re.compile(r"^EUVD-\d{4}-\d{4,}$", re.IGNORECASE)
+CVEDB_BASE_URL = "https://cvedb.shodan.io"
+
+
+def summarize_cve_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "cve_id": record.get("cve_id"),
+        "summary": record.get("summary"),
+        "cvss": record.get("cvss"),
+        "cvss_version": record.get("cvss_version"),
+        "epss": record.get("epss"),
+        "ranking_epss": record.get("ranking_epss"),
+        "kev": record.get("kev"),
+        "ransomware_campaign": record.get("ransomware_campaign"),
+        "published_time": record.get("published_time"),
+        "propose_action": record.get("propose_action"),
+        "references": (record.get("references") or [])[:5],
+        "cpes": (record.get("cpes") or [])[:10],
+    }
+
+
+def summarize_euvd_record(record: dict[str, Any]) -> dict[str, Any]:
+    cve = record.get("cve") or {}
+    return {
+        "euvd_id": record.get("euvd_id"),
+        "description": record.get("description"),
+        "cvss": record.get("cvss"),
+        "cvss_version": record.get("cvss_version"),
+        "epss": record.get("epss"),
+        "published_time": record.get("published_time"),
+        "assigner": record.get("assigner"),
+        "vendors": record.get("vendors") or [],
+        "products": record.get("products") or [],
+        "references": (record.get("references") or [])[:5],
+        "linked_cve": {
+            "cve_id": cve.get("id"),
+            "summary": cve.get("summary"),
+            "cvss": cve.get("cvss"),
+            "epss": cve.get("epss"),
+            "kev": cve.get("kev"),
+            "references": (cve.get("references") or [])[:5],
+        } if cve else None,
+    }
+
+
+@tool
+def lookup_cve(cve_id: str) -> dict[str, Any]:
+    """Look up CVE details from Shodan CVEDB.
+
+    Args:
+        cve_id: CVE identifier in CVE-YYYY-NNNN format.
+
+    Returns:
+        Selected CVE details including summary, CVSS, EPSS, KEV status, references, and CPEs.
+    """
+    normalized = cve_id.strip().upper()
+    if not CVE_ID_RE.match(normalized):
+        return {"error": f"Invalid CVE ID: {cve_id}"}
+
+    try:
+        response = requests.get(f"{CVEDB_BASE_URL}/cve/{normalized}", timeout=15)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {"cve_id": normalized, "error": str(exc)}
+
+    return summarize_cve_record(response.json())
+
+
+@tool
+def lookup_euvd(euvd_id: str) -> dict[str, Any]:
+    """Look up EUVD details from Shodan CVEDB.
+
+    Args:
+        euvd_id: EUVD identifier in EUVD-YYYY-NNNN format.
+
+    Returns:
+        Selected EUVD details including description, CVSS, EPSS, references, affected products, and linked CVE data.
+    """
+    normalized = euvd_id.strip().upper()
+    if not EUVD_ID_RE.match(normalized):
+        return {"error": f"Invalid EUVD ID: {euvd_id}"}
+
+    try:
+        response = requests.get(f"{CVEDB_BASE_URL}/euvd/{normalized}", timeout=15)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {"euvd_id": normalized, "error": str(exc)}
+
+    return summarize_euvd_record(response.json())
 
 
 def make_model() -> BedrockModel:
@@ -134,8 +225,13 @@ def build_graph():
         system_prompt=(
             "You extract concrete security facts. Return CVEs, malware names, actor "
             "names, IPs, domains, hashes, product names, versions, dates, and citations "
-            "or short source phrases when available. Do not invent missing indicators."
+            "or short source phrases when available. When CVE or EUVD IDs are present, "
+            "call lookup_cve or lookup_euvd to enrich them with CVSS, EPSS, KEV, "
+            "references, affected CPEs, products, and linked CVE data. Do not invent "
+            "missing indicators. Put the lookup details directly under the matching "
+            "CVE or EUVD indicator instead of only listing them separately."
         ),
+        tools=[lookup_cve, lookup_euvd],
         callback_handler=None,
     )
     defender = Agent(
