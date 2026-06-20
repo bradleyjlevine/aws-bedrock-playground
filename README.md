@@ -2,6 +2,21 @@
 
 Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock Agents, Bedrock Mantle, Strands Agents, MCP tools, document extraction, and voice streaming.
 
+## Key concepts shown
+
+| Concept | Examples | What to look for |
+|---------|----------|------------------|
+| Bedrock Runtime vs Bedrock Mantle | `01`, `03`-`05`, `13`, `21`, `22` | Runtime uses native Bedrock APIs such as Converse / InvokeModel. Mantle exposes OpenAI-compatible and Anthropic-compatible SDK paths with Bedrock bearer tokens. |
+| OpenAI-compatible Bedrock calls | `04`, `05`, `13`, `22` | OSS models use Mantle `/v1`; GPT-5.5 / GPT-5.4 use Mantle `/openai/v1` and the Responses API. |
+| Strands agents | `06`-`12`, `14`-`23`, `26` | Single agents, multi-agent orchestration, graph workflows, swarms, memory, structured output, and custom model adapters. |
+| Tools | `08`, `11`, `12`, `16`, `17`, `23`, `26` | Native Strands tools, `@tool` decorators, community tools such as `current_time` / `rss`, durable local-memory tools, and externally hosted tools. |
+| MCP (Model Context Protocol) | `17`, `23`, `26` | Local stdio MCP tools, remote MCP tools, Exa MCP web search, and Elastic Agent Builder MCP tools for searching WAF logs. |
+| HITL (Human in the Loop) | `11`, `12` | CLI approval with `handoff_to_user` and browser approval with Strands interrupts before a sensitive `send_email` tool runs. |
+| Streaming UI / SSE | `12`, `13`, `26` | Browser apps that stream tokens and status updates with FastAPI and Server-Sent Events. |
+| Document extraction / RAG prep | `13`-`15`, `24`, `25`, `26` | Unstructured PDF extraction, element-level JSONL, source-attributed prompt chunks, and PDF/URL threat-report context. |
+| Guardrails and safety controls | `06`, `11`, `12`, `19` | Bedrock guardrails, approval gates for sensitive actions, and DockerSandbox-based static code triage. |
+| Voice / bidirectional streaming | `18` | Amazon Nova Sonic through Strands bidirectional streaming with microphone/speaker IO. |
+
 ## Files
 
 | File | Model | API / Path | Notes |
@@ -145,6 +160,9 @@ The mantle endpoint uses two different base paths depending on the model:
 - `11_strands_streaming_cli_hitl.py` runs an interactive CLI chat loop. Includes `current_time` and a `send_email` tool gated behind `handoff_to_user` — the agent pauses and asks for approval; `send_email` only executes after the user confirms. Type `quit` to exit.
 - `12_strands_webui_sse_hitl.py` runs a FastAPI server on `http://localhost:8000` with a single-page chat UI. Includes `current_time`. Tokens stream over SSE; `send_email` triggers a Strands `BeforeToolCallEvent` interrupt, the browser shows an Approve / Deny card with the drafted email, and the agent only resumes after the user clicks. Try: *"Email alex@example.com saying the deploy is done."* or *"What time is it?"*
 - `13_mantle_gpt55_cybersec_webui.py` runs a FastAPI server on `http://localhost:8001`. Upload a PDF or enter a URL; PDF text is extracted locally with Unstructured (`partition_pdf`) and summarized with GPT-5.5, falling back to GPT-5.4 for known intermittent Mantle failures.
+
+  ![Example 13 GPT-5.5 cyber-security summary UI](media/2026-06-20_13-14-14_13_gpt_5_5_example.png)
+
 - `14_strands_cybersec_triage_graph.py` demonstrates Strands `GraphBuilder` with GPT OSS 120B through Bedrock Runtime: triage, IOC extraction, defensive planning, and final briefing nodes run as a deterministic cyber-analysis graph over PDF, URL, saved HTML, or text inputs. PDF text extraction uses shared Unstructured helpers, and the IOC extractor can call Shodan CVEDB's `/cve/{cve_id}` and `/euvd/{euvd_id}` endpoints to enrich vulnerabilities with CVSS, EPSS, KEV status, references, affected CPEs/products, and linked CVE data.
 - `15_strands_structured_cybersec_brief.py` demonstrates Strands structured output with GPT OSS 120B and Pydantic. It returns a validated cyber brief object with severity, confidence, indicators, recommended actions, and open questions, uses the same Unstructured PDF extraction helper, and includes the same CVEDB lookup tools for CVE/EUVD enrichment.
 - `16_strands_local_memory_advisor.py` demonstrates durable memory as explicit Strands tools backed by `./sessions/security_memory.json`. The installed Strands SDK does not expose the newer `MemoryManager` constructor surface, so this example keeps memory local and transparent.
