@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def configure_script_logging(script_file: str, *, level: int = logging.DEBUG) -> logging.Logger:
-    """Write DEBUG logs for one script to logs/<script-stem>.log."""
+    """Write DEBUG logs for one script to logs/<script-stem>.log for the current run."""
     script_path = Path(script_file)
     log_dir = script_path.resolve().parent / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -23,7 +23,7 @@ def configure_script_logging(script_file: str, *, level: int = logging.DEBUG) ->
         for handler in root.handlers
     )
     if not file_handler_exists:
-        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
         file_handler.setLevel(level)
         file_handler.setFormatter(
             logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")

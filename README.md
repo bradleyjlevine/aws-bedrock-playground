@@ -176,7 +176,8 @@ uv run python 24_pdf_to_unstructured_elements.py ./report.pdf --pretty --max-ele
 uv run python 25_pdf_elements_to_prompt_chunks.py ./report.pdf --question "Summarize the key risks."
 ```
 
-Each numbered example writes DEBUG logs to `logs/<script-name>.log`. Those logs
+Each numbered example writes DEBUG logs for the current run to
+`logs/<script-name>.log`, replacing the previous contents at startup. Those logs
 include SDK/request lifecycle details from libraries such as botocore, httpx,
 urllib3, OpenAI, Strands, and Unstructured, which is useful when checking which
 calls are being made. The log files are ignored by Git.
