@@ -29,13 +29,14 @@ LOGGER = configure_script_logging(__file__)
 
 import asyncio
 import json
+import time
 from urllib.parse import urlparse
 
 import markdownify
 import requests as _requests
 import uvicorn
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from openai import AsyncBedrockOpenAI
 
@@ -117,6 +118,27 @@ SYSTEM_PROMPT = (
 # ---------------------------------------------------------------------------
 
 app = FastAPI()
+
+
+@app.middleware("http")
+async def _log_http_request(request: Request, call_next):
+    start = time.perf_counter()
+    LOGGER.debug("HTTP request start method=%s path=%s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        LOGGER.exception("HTTP request failed method=%s path=%s", request.method, request.url.path)
+        raise
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    LOGGER.debug(
+        "HTTP request complete method=%s path=%s status=%d elapsed_ms=%.1f",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
 
 
 def _sse(payload: dict) -> str:
@@ -689,4 +711,11 @@ analyseBtn.addEventListener("click", async () => {
 
 if __name__ == "__main__":
     print("Open http://localhost:8001 in your browser.")
-    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=8001,
+        log_level="debug",
+        log_config=None,
+        access_log=True,
+    )

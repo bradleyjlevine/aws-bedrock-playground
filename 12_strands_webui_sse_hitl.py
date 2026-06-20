@@ -36,11 +36,12 @@ from logging_utils import configure_script_logging
 LOGGER = configure_script_logging(__file__)
 import json
 import os
+import time
 from typing import Any
 
 import boto3
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from strands import Agent, tool
@@ -159,6 +160,28 @@ agent = Agent(
 # ---------------------------------------------------------------------------
 
 app = FastAPI()
+
+
+@app.middleware("http")
+async def _log_http_request(request: Request, call_next):
+    start = time.perf_counter()
+    LOGGER.debug("HTTP request start method=%s path=%s", request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        LOGGER.exception("HTTP request failed method=%s path=%s", request.method, request.url.path)
+        raise
+
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    LOGGER.debug(
+        "HTTP request complete method=%s path=%s status=%d elapsed_ms=%.1f",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+    )
+    return response
+
 
 # Track which interrupt_ids are currently awaiting a decision so /approve
 # can reject stale or duplicate calls.
@@ -421,4 +444,11 @@ async def approve(req: ApproveRequest) -> StreamingResponse:
 
 if __name__ == "__main__":
     print("Open http://localhost:8000 in your browser.")
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(
+        app,
+        host="127.0.0.1",
+        port=8000,
+        log_level="debug",
+        log_config=None,
+        access_log=True,
+    )

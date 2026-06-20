@@ -43,6 +43,7 @@ auth.py                        # shared auth helper — DO NOT modify without re
 23_strands_rss_exa_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
 24_pdf_to_unstructured_elements.py # Unstructured OSS: PDF → typed elements JSONL
 25_pdf_elements_to_prompt_chunks.py # Unstructured OSS: elements → source-attributed prompt chunks
+26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastAPI: WAF log search via Elastic Agent Builder MCP
 sessions/                      # Created by 09 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
