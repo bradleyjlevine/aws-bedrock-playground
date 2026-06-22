@@ -1,19 +1,26 @@
 """
-Hello World: Strands Structured Output — typed cyber-security summary
-Extracts a PDF or URL into a validated Pydantic object instead of free-form text.
+Hello World: Strands Graph — cyber-security triage pipeline
+Runs a deterministic multi-agent graph over a PDF or URL:
+  extract context -> threat triage -> IOC/CVE extraction -> defensive plan -> briefing
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 15_strands_structured_cybersec_brief.py --url https://example.com/report
-         uv run python 15_strands_structured_cybersec_brief.py --pdf ./report.pdf
-         uv run python 15_strands_structured_cybersec_brief.py --html ./saved-page.html
+Run:     uv run python examples/cybersecurity/14_strands_cybersec_triage_graph.py --url https://example.com/report
+         uv run python examples/cybersecurity/14_strands_cybersec_triage_graph.py --pdf ./report.pdf
+         uv run python examples/cybersecurity/14_strands_cybersec_triage_graph.py --html ./saved-page.html
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 
 LOGGER = configure_script_logging(__file__)
 import argparse
-import json
 import os
 import re
 from pathlib import Path
@@ -24,9 +31,9 @@ import boto3
 import markdownify
 import requests
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, Field
 from strands import Agent, tool
 from strands.models import BedrockModel
+from strands.multiagent import GraphBuilder
 
 from pdf_utils import extract_pdf_text_from_path
 
@@ -137,77 +144,10 @@ def lookup_euvd(euvd_id: str) -> dict[str, Any]:
     return summarize_euvd_record(response.json())
 
 
-class VulnerabilityDetails(BaseModel):
-    """Optional enrichment for CVE or EUVD indicators."""
-
-    summary: str | None = Field(description="CVEDB summary or EUVD description")
-    cvss: float | None = Field(description="CVSS score from CVEDB, if available")
-    cvss_version: float | str | None = Field(description="CVSS version from CVEDB, if available")
-    epss: float | None = Field(description="EPSS probability from CVEDB, if available")
-    kev: bool | None = Field(description="Whether the linked CVE is known exploited, if available")
-    published_time: str | None = Field(description="Published timestamp from CVEDB, if available")
-    linked_cve_id: str | None = Field(description="Linked CVE ID for EUVD records, if present")
-    references: list[str] = Field(description="Up to five supporting references from CVEDB")
-    affected_cpes_or_products: list[str] = Field(description="Affected CPEs, products, or vendors from CVEDB")
-
-
-class CyberIndicator(BaseModel):
-    """Concrete indicator or named security artifact from the source."""
-
-    kind: str = Field(description="Type, e.g. CVE, EUVD, domain, IP, hash, malware, actor, product")
-    cwe: str | None = Field(description=("IF kind = CVE THEN CWE (Common Weakness Enumeration),"
-                                  " e.x CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')"
-                                  "ELSE None"))
-    value: str = Field(description="Exact indicator value or name")
-    context: str = Field(description="Short explanation of why it matters")
-    vulnerability_details: VulnerabilityDetails | None = Field(
-        description=(
-            "For CVE or EUVD indicators, details from lookup_cve or lookup_euvd. "
-            "Use null for non-vulnerability indicators or when lookup fails."
-        )
-    )
-
-
-class CyberAction(BaseModel):
-    """Recommended defensive action."""
-
-    priority: str = Field(description="high, medium, or low")
-    owner: str = Field(description="Likely owning team or role")
-    action: str = Field(description="Concrete action to take")
-    rationale: str = Field(description="Why this action follows from the source")
-
-
-class CyberBrief(BaseModel):
-    """Validated cyber-security briefing extracted from source material."""
-
-    title: str
-    severity: str = Field(description="critical, high, medium, low, or informational")
-    confidence: str = Field(description="high, medium, or low")
-    executive_summary: str = Field(description="2-4 sentence plain-language summary")
-    key_changes: list[str] = Field(description="What changed in the threat landscape")
-    affected_products_or_sectors: list[str]
-    indicators: list[CyberIndicator]
-    recommended_actions: list[CyberAction]
-    open_questions: list[str]
-
-
-def make_agent() -> Agent:
+def make_model() -> BedrockModel:
     profile = os.environ.get("AWS_PROFILE")
     session = boto3.Session(profile_name=profile, region_name=REGION)
-    model = BedrockModel(model_id=MODEL_ID, boto_session=session)
-    return Agent(
-        model=model,
-        system_prompt=(
-            "You are a cyber-security analyst. Extract only facts supported by the "
-            "source. Use lookup_cve for CVE IDs and lookup_euvd for EUVD IDs when "
-            "present so CVSS, EPSS, KEV status, linked CVEs, and recommendations can "
-            "be grounded in current vulnerability data. Add successful lookup results "
-            "to each matching indicator's vulnerability_details field. "
-            "If evidence is thin, lower confidence and add open questions."
-        ),
-        tools=[lookup_cve, lookup_euvd],
-        callback_handler=None,
-    )
+    return BedrockModel(model_id=MODEL_ID, boto_session=session)
 
 
 def browser_headers_for(url: str) -> dict[str, str]:
@@ -313,6 +253,77 @@ def load_source(
     raise ValueError("Pass --pdf, --url, --html, or --text.")
 
 
+def result_text(value: Any) -> str:
+    result = getattr(value, "result", value)
+    message = getattr(result, "message", None)
+    if isinstance(message, dict):
+        parts = message.get("content") or []
+        texts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+        return "\n".join(texts).strip()
+    return str(result).strip()
+
+
+def build_graph():
+    model = make_model()
+
+    triage = Agent(
+        name="triage",
+        model=model,
+        system_prompt=(
+            "You classify cyber-security source material. Identify the threat type, "
+            "likely affected sectors, severity, attacker intent, and what changed."
+        ),
+        callback_handler=None,
+    )
+    ioc_extractor = Agent(
+        name="ioc_extractor",
+        model=model,
+        system_prompt=(
+            "You extract concrete security facts. Return CVEs, malware names, actor "
+            "names, IPs, domains, hashes, product names, versions, dates, and citations "
+            "or short source phrases when available. When CVE or EUVD IDs are present, "
+            "call lookup_cve or lookup_euvd to enrich them with CVSS, EPSS, KEV, "
+            "references, affected CPEs, products, and linked CVE data. Do not invent "
+            "missing indicators. Put the lookup details directly under the matching "
+            "CVE or EUVD indicator instead of only listing them separately."
+        ),
+        tools=[lookup_cve, lookup_euvd],
+        callback_handler=None,
+    )
+    defender = Agent(
+        name="defender",
+        model=model,
+        system_prompt=(
+            "You convert threat intelligence into defensive action. Prioritize detection, "
+            "patching, containment, logging, and executive risk decisions."
+        ),
+        callback_handler=None,
+    )
+    briefing = Agent(
+        name="briefing",
+        model=model,
+        system_prompt=(
+            "You write final incident-style briefings from upstream graph outputs. "
+            "Use sections: Executive Summary, What Changed, Evidence, Recommended Actions, "
+            "Open Questions. Be concise and specific."
+        ),
+        callback_handler=None,
+    )
+
+    builder = GraphBuilder()
+    builder.add_node(triage, "triage")
+    builder.add_node(ioc_extractor, "iocs")
+    builder.add_node(defender, "defense")
+    builder.add_node(briefing, "briefing")
+    builder.add_edge("triage", "iocs")
+    builder.add_edge("triage", "defense")
+    builder.add_edge("iocs", "briefing")
+    builder.add_edge("defense", "briefing")
+    builder.set_entry_point("triage")
+    builder.set_execution_timeout(600)
+    return builder.build()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pdf", action="append", help="Path to a PDF report. Repeat for multiple PDFs.")
@@ -322,14 +333,18 @@ def main() -> None:
     args = parser.parse_args()
 
     source = load_sources(args.pdf, args.url, args.html, args.text)
-    result = make_agent()(
-        "Create a structured cyber-security briefing from these sources. "
-        "Preserve source attribution in context fields and recommended-action rationales "
-        "when a claim comes from a specific source.\n\n" + source,
-        structured_output_model=CyberBrief,
+    graph = build_graph()
+    result = graph(
+        "Analyze these cyber-security sources together through the triage graph. "
+        "Preserve concrete facts and cite source names, source URLs, or short source "
+        "phrases when possible.\n\n"
+        f"{source}"
     )
 
-    print(json.dumps(result.structured_output.model_dump(), indent=2, ensure_ascii=False))
+    print(f"Status: {result.status}")
+    print(f"Execution order: {[node.node_id for node in result.execution_order]}\n")
+    final = result.results.get("briefing")
+    print(result_text(final if final is not None else result))
 
 
 if __name__ == "__main__":

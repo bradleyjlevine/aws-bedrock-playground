@@ -21,9 +21,16 @@ Elastic setup:
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 26_strands_elastic_waf_mcp_webui.py
+Run:     uv run python examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py
          Then open http://localhost:8002
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 

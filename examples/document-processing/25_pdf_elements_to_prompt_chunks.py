@@ -1,8 +1,8 @@
 """Convert Unstructured PDF elements into model-ready prompt chunks.
 
 Run:
-    uv run python 25_pdf_elements_to_prompt_chunks.py ./report.pdf
-    uv run python 25_pdf_elements_to_prompt_chunks.py ./report.pdf --question "Summarize key risks."
+    uv run python examples/document-processing/25_pdf_elements_to_prompt_chunks.py ./report.pdf
+    uv run python examples/document-processing/25_pdf_elements_to_prompt_chunks.py ./report.pdf --question "Summarize key risks."
 
 This example keeps the source filename, page numbers, and element types beside
 the extracted text. Those labels make chunks useful for AI models because the
@@ -18,6 +18,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 from unstructured.partition.pdf import partition_pdf

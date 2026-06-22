@@ -7,8 +7,15 @@ AnthropicModel adapter, then swaps the underlying Anthropic client to the
 Mantle-specific AsyncAnthropicBedrockMantle client.
 
 SSO: aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run: uv run python 21_strands_mantle_anthropic_adapter.py
+Run: uv run python examples/mantle/21_strands_mantle_anthropic_adapter.py
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 

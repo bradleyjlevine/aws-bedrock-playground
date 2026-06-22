@@ -19,9 +19,16 @@ Architecture:
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 13_mantle_gpt55_cybersec_webui.py
+Run:     uv run python examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py
          Then open http://localhost:8001
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 
@@ -638,7 +645,7 @@ analyseBtn.addEventListener("click", async () => {
         headers: { "Accept": "text/event-stream" },
       });
     } catch (err) {
-      setStatus("Could not reach the FastAPI server. Make sure 13_mantle_gpt55_cybersec_webui.py is still running on http://localhost:8001.");
+      setStatus("Could not reach the FastAPI server. Make sure examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py is still running on http://localhost:8001.");
       return;
     }
 

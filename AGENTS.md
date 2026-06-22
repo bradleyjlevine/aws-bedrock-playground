@@ -10,41 +10,48 @@ Hello-world examples for AWS Bedrock: foundation models, agents, and the bedrock
 
 ```bash
 uv sync                        # install dependencies
-uv run python <file>.py        # run a script
-AWS_PROFILE=<profile> uv run python <file>.py  # run with a specific SSO profile
+uv run python examples/<group>/<file>.py        # run a script
+AWS_PROFILE=<profile> uv run python examples/<group>/<file>.py  # run with a specific SSO profile
 ```
 
 ## Project structure
 
 ```
 auth.py                        # shared auth helper — DO NOT modify without reading the note below
-01_bedrock_converse_foundation_model.py                 # bedrock-runtime, Converse API
-02_bedrock_invoke_agent.py              # bedrock-agent-runtime, InvokeAgent
-03_mantle_anthropic_messages.py   # bedrock-mantle, Anthropic Messages API
-04_mantle_openai_responses_oss.py      # bedrock-mantle /v1, OpenAI Responses API (OSS models)
-05_mantle_gpt55_codex.py              # bedrock-mantle /openai/v1, Codex / GPT-5.5
-06_strands_bedrock_guardrail_agent.py      # Strands single agent with Bedrock guardrail
-07_strands_multiagent_rss_briefing.py # Strands multi-agent: fetcher + time + orchestrator
-08_strands_custom_tools.py   # Strands @tool decorator
-09_strands_file_session_history.py       # Strands FileSessionManager (persistent history)
-10_strands_swarm_handoff.py         # Strands Swarm (autonomous handoff)
-11_strands_streaming_cli_hitl.py     # Custom callback_handler + CLI chat loop + current_time + HITL (handoff_to_user)
-12_strands_webui_sse_hitl.py         # FastAPI + SSE WebUI chat (browser) + current_time + HITL (interrupt hook)
-13_mantle_gpt55_cybersec_webui.py      # FastAPI + SSE WebUI: upload PDF or URL → GPT-5.5 cyber-security summary
-14_strands_cybersec_triage_graph.py     # Strands Graph: cyber triage over PDF/URL/HTML/text sources
-15_strands_structured_cybersec_brief.py # Strands structured output: validated cyber brief object
-16_strands_local_memory_advisor.py      # Strands tools: local durable memory advisor
-17_strands_mcp_repo_tools_agent.py      # Strands MCP: native + local/remote MCP tools
-18_nova_sonic_voice_incident_briefing.py # Nova Sonic bidirectional voice briefing
-19_strands_docker_sandbox_code_triage.py # Strands DockerSandbox static code triage
-20_strands_workflow_research_report.py  # Strands workflow tool for research reports
-21_strands_mantle_anthropic_adapter.py # Strands custom Anthropic adapter over bedrock-mantle /anthropic
-22_strands_mantle_openai_gpt54.py  # Strands OpenAI Responses adapter over bedrock-mantle /openai/v1
-23_strands_rss_exa_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
-24_pdf_to_unstructured_elements.py # Unstructured OSS: PDF → typed elements JSONL
-25_pdf_elements_to_prompt_chunks.py # Unstructured OSS: elements → source-attributed prompt chunks
-26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastAPI: WAF log search via Elastic Agent Builder MCP
-sessions/                      # Created by 09 at runtime; safe to delete
+examples/core/                 # Bedrock Runtime basics and guardrails
+examples/mantle/               # bedrock-mantle examples and Strands mantle adapters
+examples/agents/               # Strands agent, tool, MCP, swarm, workflow, and HITL examples
+examples/cybersecurity/        # Cyber-security focused UIs, triage, detection, IAM, voice, sandbox examples
+examples/document-processing/  # Unstructured PDF/document extraction examples
+examples/core/01_bedrock_converse_foundation_model.py                 # bedrock-runtime, Converse API
+examples/core/02_bedrock_invoke_agent.py              # bedrock-agent-runtime, InvokeAgent
+examples/mantle/03_mantle_anthropic_messages.py   # bedrock-mantle, Anthropic Messages API
+examples/mantle/04_mantle_openai_responses_oss.py      # bedrock-mantle /v1, OpenAI Responses API (OSS models)
+examples/mantle/05_mantle_gpt55_codex.py              # bedrock-mantle /openai/v1, Codex / GPT-5.5
+examples/core/06_strands_bedrock_guardrail_agent.py      # Strands single agent with Bedrock guardrail
+examples/agents/07_strands_multiagent_rss_briefing.py # Strands multi-agent: fetcher + time + orchestrator
+examples/agents/08_strands_custom_tools.py   # Strands @tool decorator
+examples/agents/09_strands_file_session_history.py       # Strands FileSessionManager (persistent history)
+examples/agents/10_strands_swarm_handoff.py         # Strands Swarm (autonomous handoff)
+examples/agents/11_strands_streaming_cli_hitl.py     # Custom callback_handler + CLI chat loop + current_time + HITL (handoff_to_user)
+examples/agents/12_strands_webui_sse_hitl.py         # FastAPI + SSE WebUI chat (browser) + current_time + HITL (interrupt hook)
+examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py      # FastAPI + SSE WebUI: upload PDF or URL → GPT-5.5 cyber-security summary
+examples/cybersecurity/14_strands_cybersec_triage_graph.py     # Strands Graph: cyber triage over PDF/URL/HTML/text sources
+examples/cybersecurity/15_strands_structured_cybersec_brief.py # Strands structured output: validated cyber brief object
+examples/agents/16_strands_local_memory_advisor.py      # Strands tools: local durable memory advisor
+examples/agents/17_strands_mcp_repo_tools_agent.py      # Strands MCP: native + local/remote MCP tools
+examples/cybersecurity/18_nova_sonic_voice_incident_briefing.py # Nova Sonic bidirectional voice briefing
+examples/cybersecurity/19_strands_docker_sandbox_code_triage.py # Strands DockerSandbox static code triage
+examples/agents/20_strands_workflow_research_report.py  # Strands workflow tool for research reports
+examples/mantle/21_strands_mantle_anthropic_adapter.py # Strands custom Anthropic adapter over bedrock-mantle /anthropic
+examples/mantle/22_strands_mantle_openai_gpt54.py  # Strands OpenAI Responses adapter over bedrock-mantle /openai/v1
+examples/agents/23_strands_rss_exa_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
+examples/document-processing/24_pdf_to_unstructured_elements.py # Unstructured OSS: PDF → typed elements JSONL
+examples/document-processing/25_pdf_elements_to_prompt_chunks.py # Unstructured OSS: elements → source-attributed prompt chunks
+examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastAPI: WAF log search via Elastic Agent Builder MCP
+examples/cybersecurity/27_strands_detection_engineering.py # Strands structured output: telemetry -> Sigma-style detections + hunts
+examples/cybersecurity/28_strands_iam_policy_risk_review.py # Strands structured output: IAM policy risk + least-privilege review
+examples/agents/sessions/      # Created by 09/16 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
 

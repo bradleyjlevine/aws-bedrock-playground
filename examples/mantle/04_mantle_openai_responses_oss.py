@@ -1,12 +1,19 @@
 """
 Hello World: AWS Bedrock Mantle — OpenAI Responses API (Amazon Nova)
 Amazon Nova models support the OpenAI Responses API on the bedrock-mantle openai/v1 path.
-(Claude models on this path use the Anthropic Messages API instead — see 03_mantle_anthropic_messages.py)
+(Claude models on this path use the Anthropic Messages API instead — see examples/mantle/03_mantle_anthropic_messages.py)
 Auth: bearer token minted from the boto3 credential chain (respects AWS_PROFILE / SSO).
 
 Install: pip install openai aws-bedrock-token-generator
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 
@@ -16,7 +23,7 @@ from auth import get_mantle_token
 
 REGION = "us-east-1"
 
-# Note: OSS/Nova models use /v1 base path. GPT-5.5 uses /openai/v1 (see 05_mantle_gpt55_codex.py)
+# Note: OSS/Nova models use /v1 base path. GPT-5.5 uses /openai/v1 (see examples/mantle/05_mantle_gpt55_codex.py)
 client = OpenAI(
     base_url=f"https://bedrock-mantle.{REGION}.api.aws/v1",
     api_key=get_mantle_token(REGION),

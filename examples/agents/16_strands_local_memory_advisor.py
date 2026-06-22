@@ -8,8 +8,15 @@ backend as normal Strands tools. It still demonstrates cross-run recall/write.
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 16_strands_local_memory_advisor.py
+Run:     uv run python examples/agents/16_strands_local_memory_advisor.py
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 

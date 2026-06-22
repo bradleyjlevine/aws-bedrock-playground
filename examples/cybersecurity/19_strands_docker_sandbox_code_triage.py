@@ -6,10 +6,17 @@ Strands DockerSandbox attaches to an already-running container. Start one first:
   docker run --rm -it --name strands-cybersec-sandbox python:3.12-slim sleep infinity
 
 Then run:
-  uv run python 19_strands_docker_sandbox_code_triage.py
+  uv run python examples/cybersecurity/19_strands_docker_sandbox_code_triage.py
 
 Set STRANDS_SANDBOX_CONTAINER to use a different running container name.
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 

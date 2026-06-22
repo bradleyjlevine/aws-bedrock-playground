@@ -1,8 +1,8 @@
 """Show how Unstructured turns a PDF into typed document elements.
 
 Run:
-    uv run python 24_pdf_to_unstructured_elements.py ./report.pdf
-    uv run python 24_pdf_to_unstructured_elements.py ./report.pdf --pretty --max-elements 20
+    uv run python examples/document-processing/24_pdf_to_unstructured_elements.py ./report.pdf
+    uv run python examples/document-processing/24_pdf_to_unstructured_elements.py ./report.pdf --pretty --max-elements 20
 
 The output is JSONL by default so it can be piped into other tools. Each row is
 one extracted element with text plus source metadata that an AI pipeline can use
@@ -16,6 +16,10 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 from unstructured.partition.pdf import partition_pdf

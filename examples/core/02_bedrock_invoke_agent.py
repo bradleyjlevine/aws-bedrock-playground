@@ -7,6 +7,13 @@ Endpoint: bedrock-agent-runtime  Auth: SigV4 (boto3 credentials)
 SSO: set AWS_PROFILE=your-sso-profile-name before running, or set PROFILE below.
 """
 
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from logging_utils import configure_script_logging
 
 LOGGER = configure_script_logging(__file__)

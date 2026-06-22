@@ -7,8 +7,15 @@ plain /v1 path for OSS/Nova-style OpenAI-compatible models, so this example
 uses a tiny OpenAIResponsesModel subclass to point Strands at /openai/v1.
 
 SSO: aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run: uv run python 22_strands_mantle_openai_gpt54.py
+Run: uv run python examples/mantle/22_strands_mantle_openai_gpt54.py
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 

@@ -6,10 +6,10 @@ Requires Python 3.12+, microphone/speaker access, and bidirectional extras:
   uv add "strands-agents[bidi]"
 
 SSO: aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run: uv run python 18_nova_sonic_voice_incident_briefing.py
-     uv run python 18_nova_sonic_voice_incident_briefing.py --list-devices
-     uv run python 18_nova_sonic_voice_incident_briefing.py --text-output-only
-     uv run python 18_nova_sonic_voice_incident_briefing.py --input-device 1 --output-device 2
+Run: uv run python examples/cybersecurity/18_nova_sonic_voice_incident_briefing.py
+     uv run python examples/cybersecurity/18_nova_sonic_voice_incident_briefing.py --list-devices
+     uv run python examples/cybersecurity/18_nova_sonic_voice_incident_briefing.py --text-output-only
+     uv run python examples/cybersecurity/18_nova_sonic_voice_incident_briefing.py --input-device 1 --output-device 2
 
 Important: BidiAudioIO uses PyAudio, which does not provide echo cancellation.
 Use headphones/headset audio. If the Mac speakers play the assistant response
@@ -20,6 +20,13 @@ Try saying:
   "What time is it?"
   "Stop."
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 

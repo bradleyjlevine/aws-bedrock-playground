@@ -15,6 +15,13 @@ Install: uv sync  (strands-agents + strands-agents-tools[rss] already in pyproje
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 """
 
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from logging_utils import configure_script_logging
 
 LOGGER = configure_script_logging(__file__)

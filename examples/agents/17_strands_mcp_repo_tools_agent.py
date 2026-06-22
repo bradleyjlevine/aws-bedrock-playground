@@ -6,13 +6,20 @@ Strands tools.
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
-Run:     uv run python 17_strands_mcp_repo_tools_agent.py
-Server:  uv run python 17_strands_mcp_repo_tools_agent.py --server
+Run:     uv run python examples/agents/17_strands_mcp_repo_tools_agent.py
+Server:  uv run python examples/agents/17_strands_mcp_repo_tools_agent.py --server
 
 Optional remote MCP:
-  REMOTE_MCP_URL=http://localhost:8000/mcp uv run python 17_strands_mcp_repo_tools_agent.py
-  REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python 17_strands_mcp_repo_tools_agent.py
+  REMOTE_MCP_URL=http://localhost:8000/mcp uv run python examples/agents/17_strands_mcp_repo_tools_agent.py
+  REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python examples/agents/17_strands_mcp_repo_tools_agent.py
 """
+
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging
 
@@ -35,7 +42,8 @@ from strands_tools import current_time
 
 REGION = "us-east-1"
 MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-ROOT = Path(__file__).resolve().parent
+SCRIPT_PATH = Path(__file__).resolve()
+ROOT = SCRIPT_PATH.parents[2]
 REMOTE_MCP_URL = os.environ.get("REMOTE_MCP_URL", "").strip()
 REMOTE_MCP_TRANSPORT = os.environ.get("REMOTE_MCP_TRANSPORT", "streamable-http").strip()
 
@@ -105,7 +113,7 @@ def make_local_mcp_client() -> MCPClient:
         lambda: stdio_client(
             StdioServerParameters(
                 command="uv",
-                args=["run", "python", str(Path(__file__).name), "--server"],
+                args=["run", "python", str(SCRIPT_PATH), "--server"],
                 cwd=str(ROOT),
             )
         )
