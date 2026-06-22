@@ -38,7 +38,7 @@ from strands.multiagent import GraphBuilder
 from pdf_utils import extract_pdf_text_from_path
 
 REGION = "us-east-1"
-MODEL_ID = "openai.gpt-oss-120b-1:0"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0")
 MAX_CHARS = 90_000
 BROWSER_HEADERS = {
     "User-Agent": (

@@ -41,7 +41,10 @@ from strands.tools.mcp import MCPClient
 from strands_tools import current_time
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 SCRIPT_PATH = Path(__file__).resolve()
 ROOT = SCRIPT_PATH.parents[2]
 REMOTE_MCP_URL = os.environ.get("REMOTE_MCP_URL", "").strip()

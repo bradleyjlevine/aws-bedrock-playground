@@ -32,7 +32,10 @@ from strands.models import BedrockModel
 from strands_tools import rss, current_time
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 KREBS_FEED = "https://krebsonsecurity.com/feed/"
 
 profile = os.environ.get("AWS_PROFILE")

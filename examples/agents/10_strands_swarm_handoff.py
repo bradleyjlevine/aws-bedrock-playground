@@ -31,7 +31,10 @@ from strands.models import BedrockModel
 from strands.multiagent import Swarm
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 
 profile = os.environ.get("AWS_PROFILE")
 boto_session = boto3.Session(profile_name=profile, region_name=REGION)

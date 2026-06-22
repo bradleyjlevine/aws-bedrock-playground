@@ -57,7 +57,10 @@ from strands.models import BedrockModel
 from strands_tools import current_time
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 
 profile = os.environ.get("AWS_PROFILE")
 session = boto3.Session(profile_name=profile, region_name=REGION)
@@ -218,7 +221,35 @@ HTML_PAGE = """\
            height: 60vh; overflow-y: auto; background: #fafafa; }
     .msg { margin: 0.6rem 0; white-space: pre-wrap; line-height: 1.4; }
     .user { color: #0066cc; }
-    .assistant { color: #1d1d1f; }
+    .assistant { color: #1d1d1f; white-space: normal; }
+    .assistant h1, .assistant h2, .assistant h3 {
+      margin: 0.35rem 0 0.25rem; line-height: 1.25; font-size: 1rem;
+    }
+    .assistant h1 { font-size: 1.08rem; }
+    .assistant p { margin: 0.35rem 0; }
+    .assistant ul, .assistant ol { margin: 0.35rem 0 0.55rem 1.25rem; padding: 0; }
+    .assistant li { margin: 0.18rem 0; }
+    .assistant code {
+      background: #e8edf3; border-radius: 4px; padding: 0.05rem 0.22rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.9em;
+    }
+    .assistant pre {
+      overflow-x: auto; background: #111827; color: #f9fafb;
+      border-radius: 6px; padding: 0.7rem; white-space: pre;
+    }
+    .assistant pre code { background: transparent; color: inherit; padding: 0; }
+    .assistant table {
+      width: 100%; border-collapse: collapse; margin: 0.55rem 0;
+      font-size: 0.88rem; display: block; overflow-x: auto;
+    }
+    .assistant th, .assistant td {
+      border: 1px solid #cbd5e1; padding: 0.4rem 0.5rem;
+      text-align: left; vertical-align: top;
+    }
+    .assistant th { background: #eef2f7; }
+    .assistant hr { border: 0; border-top: 1px solid #cbd5e1; margin: 0.75rem 0; }
+    .assistant a { color: #0066cc; }
     .tool { color: #8e8e93; font-style: italic; font-size: 0.85rem; }
     .approval { background: #fff4d6; border: 1px solid #f0c040; border-radius: 8px;
                 padding: 0.75rem 1rem; margin: 0.6rem 0; }
@@ -265,6 +296,182 @@ function add(cls, text) {
   return div;
 }
 
+function escapeHTML(value) {
+  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function renderInline(markdown) {
+  let html = escapeHTML(markdown);
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+  html = html.replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
+  html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return html;
+}
+
+function splitTableRow(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map(cell => cell.trim());
+}
+
+function isTableSeparator(line) {
+  return /^\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?$/.test(line.trim());
+}
+
+function isPipeTableRow(line) {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && splitTableRow(trimmed).length >= 2;
+}
+
+function renderTable(lines, start) {
+  const header = splitTableRow(lines[start]);
+  const rows = [];
+  let index = start + 2;
+  while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+    rows.push(splitTableRow(lines[index]));
+    index += 1;
+  }
+  const thead = "<thead><tr>" + header.map(cell => "<th>" + renderInline(cell) + "</th>").join("") + "</tr></thead>";
+  const tbody = "<tbody>" + rows.map(row => {
+    const cells = header.map((_, i) => "<td>" + renderInline(row[i] || "") + "</td>").join("");
+    return "<tr>" + cells + "</tr>";
+  }).join("") + "</tbody>";
+  return { html: "<table>" + thead + tbody + "</table>", next: index };
+}
+
+function renderLooseTable(lines, start) {
+  const tableLines = [];
+  let index = start;
+  while (index < lines.length && isPipeTableRow(lines[index])) {
+    tableLines.push(lines[index]);
+    index += 1;
+  }
+  if (tableLines.length < 2) return null;
+  const header = splitTableRow(tableLines[0]);
+  const rows = tableLines.slice(1).map(splitTableRow);
+  const thead = "<thead><tr>" + header.map(cell => "<th>" + renderInline(cell) + "</th>").join("") + "</tr></thead>";
+  const tbody = "<tbody>" + rows.map(row => {
+    const cells = header.map((_, i) => "<td>" + renderInline(row[i] || "") + "</td>").join("");
+    return "<tr>" + cells + "</tr>";
+  }).join("") + "</tbody>";
+  return { html: "<table>" + thead + tbody + "</table>", next: index };
+}
+
+function normalizeMarkdown(markdown) {
+  return markdown
+    .replace(/([^\\n])\\s*(#{1,3}\\s+)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(---+|___+|\\*\\*\\*+)\\s*(?=\\n|$)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(```)/g, "$1\\n\\n$2")
+    .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\\.)/g, "$1\\n\\n$2")
+    .replace(/(:)(Let me|Now let me|I'll|I will|Next,)/g, "$1\\n\\n$2");
+}
+
+function repairMarkdownLines(lines) {
+  const repaired = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    if (/^#{1,3}$/.test(trimmed)) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j += 1;
+      if (j < lines.length) {
+        repaired.push(trimmed + " " + lines[j].trim());
+        i = j;
+        continue;
+      }
+    }
+    repaired.push(lines[i]);
+  }
+  return repaired;
+}
+
+function renderMarkdown(markdown) {
+  const lines = repairMarkdownLines(normalizeMarkdown(markdown).replace(/\\r\\n?/g, "\\n").split("\\n"));
+  const html = [];
+  let paragraph = [];
+  let listType = null;
+  let inFence = false;
+  let fenceLines = [];
+
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    html.push("<p>" + renderInline(paragraph.join(" ")) + "</p>");
+    paragraph = [];
+  }
+  function closeList() {
+    if (!listType) return;
+    html.push("</" + listType + ">");
+    listType = null;
+  }
+  function ensureList(type) {
+    if (listType === type) return;
+    closeList();
+    html.push("<" + type + ">");
+    listType = type;
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      flushParagraph(); closeList();
+      if (inFence) {
+        html.push("<pre><code>" + escapeHTML(fenceLines.join("\\n")) + "</code></pre>");
+        fenceLines = [];
+      }
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) { fenceLines.push(line); continue; }
+    if (!trimmed) { flushParagraph(); closeList(); continue; }
+    if (/^---+$/.test(trimmed) || /^___+$/.test(trimmed) || /^\\*\\*\\*+$/.test(trimmed)) {
+      flushParagraph(); closeList(); html.push("<hr>"); continue;
+    }
+    if (i + 1 < lines.length && trimmed.includes("|") && isTableSeparator(lines[i + 1])) {
+      flushParagraph(); closeList();
+      const table = renderTable(lines, i);
+      html.push(table.html);
+      i = table.next - 1;
+      continue;
+    }
+    if (i + 1 < lines.length && isPipeTableRow(trimmed) && isPipeTableRow(lines[i + 1])) {
+      flushParagraph(); closeList();
+      const table = renderLooseTable(lines, i);
+      if (table) {
+        html.push(table.html);
+        i = table.next - 1;
+        continue;
+      }
+    }
+    const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
+    if (heading) {
+      flushParagraph(); closeList();
+      const level = heading[1].length;
+      html.push("<h" + level + ">" + renderInline(heading[2]) + "</h" + level + ">");
+      continue;
+    }
+    const ordered = trimmed.match(/^\\d+\\.\\s+(.+)$/);
+    if (ordered) { flushParagraph(); ensureList("ol"); html.push("<li>" + renderInline(ordered[1]) + "</li>"); continue; }
+    const unordered = trimmed.match(/^[-*+]\\s+(.+)$/);
+    if (unordered) { flushParagraph(); ensureList("ul"); html.push("<li>" + renderInline(unordered[1]) + "</li>"); continue; }
+    closeList();
+    paragraph.push(trimmed);
+  }
+  if (inFence) {
+    html.push("<pre><code>" + escapeHTML(fenceLines.join("\\n")) + "</code></pre>");
+  }
+  flushParagraph();
+  closeList();
+  return html.join("");
+}
+
+function appendMarkdown(target, text) {
+  target.dataset.markdown = (target.dataset.markdown || "") + text;
+  target.innerHTML = renderMarkdown(target.dataset.markdown);
+  log.scrollTop = log.scrollHeight;
+}
+
 function addApprovalCard(interruptId, reason) {
   const card = document.createElement("div");
   card.className = "msg approval";
@@ -272,9 +479,9 @@ function addApprovalCard(interruptId, reason) {
   card.innerHTML =
     "<strong>Approval required: send_email</strong>" +
     "<pre>" +
-    "To:      " + (args.recipient || "") + "\\n" +
-    "Subject: " + (args.subject   || "") + "\\n" +
-    "Body:    " + (args.body      || "") +
+    "To:      " + escapeHTML(args.recipient || "") + "\\n" +
+    "Subject: " + escapeHTML(args.subject   || "") + "\\n" +
+    "Body:    " + escapeHTML(args.body      || "") +
     "</pre>" +
     '<div class="approval-buttons">' +
     '<button class="btn-approve">Approve & Send</button>' +
@@ -312,8 +519,7 @@ async function streamSSE(response, assistantBubble) {
       if (!line.startsWith("data: ")) continue;
       const evt = JSON.parse(line.slice(6));
       if (evt.type === "token") {
-        assistantBubble.textContent += evt.text;
-        log.scrollTop = log.scrollHeight;
+        appendMarkdown(assistantBubble, evt.text);
       } else if (evt.type === "tool") {
         add("tool", "[tool: " + evt.name + "]");
       } else if (evt.type === "approval_request") {

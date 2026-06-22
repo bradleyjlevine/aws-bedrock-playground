@@ -704,12 +704,33 @@ function renderLooseTable(lines, start) {
 
 function normalizeMarkdown(markdown) {
   return markdown
-    .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(#{1,3}\\s+)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(---+|___+|\\*\\*\\*+)\\s*(?=\\n|$)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(```)/g, "$1\\n\\n$2")
+    .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\\.)/g, "$1\\n\\n$2")
     .replace(/(:)(Let me|Now let me|I'll|I will|Next,)/g, "$1\\n\\n$2");
 }
 
+function repairMarkdownLines(lines) {
+  const repaired = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    if (/^#{1,3}$/.test(trimmed)) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j += 1;
+      if (j < lines.length) {
+        repaired.push(trimmed + " " + lines[j].trim());
+        i = j;
+        continue;
+      }
+    }
+    repaired.push(lines[i]);
+  }
+  return repaired;
+}
+
 function renderMarkdown(markdown) {
-  const lines = normalizeMarkdown(markdown).replace(/\\r\\n?/g, "\\n").split("\\n");
+  const lines = repairMarkdownLines(normalizeMarkdown(markdown).replace(/\\r\\n?/g, "\\n").split("\\n"));
   const html = [];
   let paragraph = [];
   let listType = null;

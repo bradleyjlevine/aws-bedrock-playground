@@ -431,6 +431,22 @@ HTML_PAGE = """\
       border-radius: 8px; padding: 0.75rem;
     }
     #output pre code { background: transparent; border: 0; padding: 0; }
+    #output table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.75rem 0;
+      font-size: 0.92rem;
+      display: block;
+      overflow-x: auto;
+    }
+    #output th, #output td {
+      border: 1px solid #d2d2d7;
+      padding: 0.45rem 0.55rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    #output th { background: #f2f2f7; }
+    #output hr { border: 0; border-top: 1px solid #d2d2d7; margin: 1rem 0; }
     .spinner { display: inline-block; margin-right: 0.5rem; }
     #status { color: #6e6e73; font-size: 0.85rem; min-height: 1.2em; }
     @media (max-width: 640px) {
@@ -496,12 +512,90 @@ function renderInline(markdown) {
   let html = escapeHTML(markdown);
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   html = html.replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>");
+  html = html.replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
   html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
   return html;
 }
 
+function splitTableRow(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map(cell => cell.trim());
+}
+
+function isTableSeparator(line) {
+  return /^\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?$/.test(line.trim());
+}
+
+function isPipeTableRow(line) {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && splitTableRow(trimmed).length >= 2;
+}
+
+function renderTable(lines, start) {
+  const header = splitTableRow(lines[start]);
+  const rows = [];
+  let index = start + 2;
+  while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+    rows.push(splitTableRow(lines[index]));
+    index += 1;
+  }
+  const thead = "<thead><tr>" + header.map(cell => "<th>" + renderInline(cell) + "</th>").join("") + "</tr></thead>";
+  const tbody = "<tbody>" + rows.map(row => {
+    const cells = header.map((_, i) => "<td>" + renderInline(row[i] || "") + "</td>").join("");
+    return "<tr>" + cells + "</tr>";
+  }).join("") + "</tbody>";
+  return { html: "<table>" + thead + tbody + "</table>", next: index };
+}
+
+function renderLooseTable(lines, start) {
+  const tableLines = [];
+  let index = start;
+  while (index < lines.length && isPipeTableRow(lines[index])) {
+    tableLines.push(lines[index]);
+    index += 1;
+  }
+  if (tableLines.length < 2) return null;
+  const header = splitTableRow(tableLines[0]);
+  const rows = tableLines.slice(1).map(splitTableRow);
+  const thead = "<thead><tr>" + header.map(cell => "<th>" + renderInline(cell) + "</th>").join("") + "</tr></thead>";
+  const tbody = "<tbody>" + rows.map(row => {
+    const cells = header.map((_, i) => "<td>" + renderInline(row[i] || "") + "</td>").join("");
+    return "<tr>" + cells + "</tr>";
+  }).join("") + "</tbody>";
+  return { html: "<table>" + thead + tbody + "</table>", next: index };
+}
+
+function normalizeMarkdown(markdown) {
+  return markdown
+    .replace(/([^\\n])\\s*(#{1,3}\\s+)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(---+|___+|\\*\\*\\*+)\\s*(?=\\n|$)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(```)/g, "$1\\n\\n$2")
+    .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\\.)/g, "$1\\n\\n$2")
+    .replace(/(:)(Let me|Now let me|I'll|I will|Next,)/g, "$1\\n\\n$2");
+}
+
+function repairMarkdownLines(lines) {
+  const repaired = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim();
+    if (/^#{1,3}$/.test(trimmed)) {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j += 1;
+      if (j < lines.length) {
+        repaired.push(trimmed + " " + lines[j].trim());
+        i = j;
+        continue;
+      }
+    }
+    repaired.push(lines[i]);
+  }
+  return repaired;
+}
+
 function renderMarkdown(markdown) {
-  const lines = markdown.replace(/\\r\\n?/g, "\\n").split("\\n");
+  const lines = repairMarkdownLines(normalizeMarkdown(markdown).replace(/\\r\\n?/g, "\\n").split("\\n"));
   const html = [];
   let paragraph = [];
   let listType = null;
@@ -527,7 +621,8 @@ function renderMarkdown(markdown) {
     listType = type;
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     const trimmed = line.trim();
 
     if (trimmed.startsWith("```")) {
@@ -552,7 +647,34 @@ function renderMarkdown(markdown) {
       continue;
     }
 
-    const heading = trimmed.match(/^(#{1,6})\\s+(.+)$/);
+    if (/^---+$/.test(trimmed) || /^___+$/.test(trimmed) || /^\\*\\*\\*+$/.test(trimmed)) {
+      flushParagraph();
+      closeList();
+      html.push("<hr>");
+      continue;
+    }
+
+    if (i + 1 < lines.length && trimmed.includes("|") && isTableSeparator(lines[i + 1])) {
+      flushParagraph();
+      closeList();
+      const table = renderTable(lines, i);
+      html.push(table.html);
+      i = table.next - 1;
+      continue;
+    }
+
+    if (i + 1 < lines.length && isPipeTableRow(trimmed) && isPipeTableRow(lines[i + 1])) {
+      flushParagraph();
+      closeList();
+      const table = renderLooseTable(lines, i);
+      if (table) {
+        html.push(table.html);
+        i = table.next - 1;
+        continue;
+      }
+    }
+
+    const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
     if (heading) {
       flushParagraph();
       closeList();

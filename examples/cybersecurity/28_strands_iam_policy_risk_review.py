@@ -31,7 +31,7 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 
 REGION = "us-east-1"
-MODEL_ID = "openai.gpt-oss-120b-1:0"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0")
 
 PRIVILEGE_ESCALATION_ACTIONS = {
     "iam:AttachUserPolicy",

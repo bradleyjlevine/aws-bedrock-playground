@@ -45,7 +45,10 @@ from strands.vended_plugins.context_offloader import ContextOffloader, InMemoryS
 from strands_tools import rss as rss_tool
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+)
 DEFAULT_DAYS = 14
 DEFAULT_MAX_ARTICLES = 10
 DEFAULT_FEED_LIMIT = 3

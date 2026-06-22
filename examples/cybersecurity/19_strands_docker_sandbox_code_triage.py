@@ -32,7 +32,10 @@ from strands.models import BedrockModel
 from strands.sandbox.docker import DockerSandbox
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 CONTAINER = os.environ.get("STRANDS_SANDBOX_CONTAINER", "strands-cybersec-sandbox")
 
 

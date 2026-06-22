@@ -34,7 +34,10 @@ from strands.session import FileSessionManager
 from strands_tools import current_time
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 SESSION_ID = "hello-session"
 AGENT_ID = "assistant"
 SESSIONS_DIR = os.path.join(os.path.dirname(__file__), "sessions")

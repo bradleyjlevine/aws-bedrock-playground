@@ -27,7 +27,10 @@ from strands import Agent
 from strands.models import BedrockModel
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 
 # Guardrail — ARN or short ID both accepted. Create one in the Bedrock console,
 # then export BEDROCK_GUARDRAIL_ID before running this example.

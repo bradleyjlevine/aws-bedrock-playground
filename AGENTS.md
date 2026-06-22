@@ -51,6 +51,7 @@ examples/document-processing/25_pdf_elements_to_prompt_chunks.py # Unstructured 
 examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastAPI: WAF log search via Elastic Agent Builder MCP
 examples/cybersecurity/27_strands_detection_engineering.py # Strands structured output: telemetry -> Sigma-style detections + hunts
 examples/cybersecurity/28_strands_iam_policy_risk_review.py # Strands structured output: IAM policy risk + least-privilege review
+examples/cybersecurity/29_strands_threat_intel_risk_chat.py # Strands CLI/WebUI chat: threat intel, cached PDF framework refs, FAIR ALE/ROSI risk analysis
 examples/agents/sessions/      # Created by 09/16 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
@@ -107,14 +108,21 @@ aws sso login --profile <profile-name>
 | `anthropic[bedrock]` | Anthropic Messages API via bedrock-mantle |
 | `openai` | OpenAI Responses/Chat Completions API via bedrock-mantle |
 | `aws-bedrock-token-generator` | Mints bearer tokens from AWS credentials for bedrock-mantle |
-| `strands-agents` | Strands agent framework — files 06–12 |
+| `strands-agents` | Strands agent framework — files 06–12, 14–20, 23, 26–29 |
 | `strands-agents-tools[rss]` | Strands community tools (rss, current_time, handoff_to_user) — files 07, 09, 11, 12 |
 | `prompt-toolkit` | Optional — provides readline-style input for file 11 |
-| `fastapi`, `uvicorn` | WebUI server for files 12, 13 |
-| `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py`; direct Unstructured demos in files 24–25 |
+| `fastapi`, `uvicorn` | WebUI server for files 12, 13, 26, 29 |
+| `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py`; direct Unstructured demos in files 24–25; cached PDF references in file 29 |
 | `pypdf` | Fallback PDF text extraction if Unstructured partitioning is unavailable |
 
 ## What NOT to do
+
+### Bedrock Runtime model overrides
+Richer Bedrock Runtime Strands examples should generally allow
+`BEDROCK_MODEL_ID` to override the default `MODEL_ID`. This applies to files
+`06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and `26`-`29`. Keep tiny
+hello-world examples, Mantle path-specific examples, and Nova Sonic fixed unless
+there is a specific reason to generalize them.
 
 ### Strands @tool decorator (file 08)
 The decorator reads the function's type annotations and docstring to build the Bedrock tool spec automatically. The docstring must have an `Args:` section for each parameter and a `Returns:` section.

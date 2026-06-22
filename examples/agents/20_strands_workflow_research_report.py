@@ -26,7 +26,10 @@ from strands.models import BedrockModel
 from strands_tools import workflow
 
 REGION = "us-east-1"
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = os.environ.get(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
 
 
 def make_agent() -> Agent:

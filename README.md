@@ -8,13 +8,13 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 |---------|----------|------------------|
 | Bedrock Runtime vs Bedrock Mantle | `01`, `03`-`05`, `13`, `21`, `22` | Runtime uses native Bedrock APIs such as Converse / InvokeModel. Mantle exposes OpenAI-compatible and Anthropic-compatible SDK paths with Bedrock bearer tokens. |
 | OpenAI-compatible Bedrock calls | `04`, `05`, `13`, `22` | OSS models use Mantle `/v1`; GPT-5.5 / GPT-5.4 use Mantle `/openai/v1` and the Responses API. |
-| Strands agents | `06`-`12`, `14`-`23`, `26`-`28` | Single agents, multi-agent orchestration, graph workflows, swarms, memory, structured output, and custom model adapters. |
-| Tools | `08`, `11`, `12`, `16`, `17`, `23`, `26`-`28` | Native Strands tools, `@tool` decorators, community tools such as `current_time` / `rss`, durable local-memory tools, and externally hosted tools. |
+| Strands agents | `06`-`12`, `14`-`23`, `26`-`29` | Single agents, multi-agent orchestration, graph workflows, swarms, memory, structured output, and custom model adapters. |
+| Tools | `08`, `11`, `12`, `16`, `17`, `23`, `26`-`29` | Native Strands tools, `@tool` decorators, community tools such as `current_time` / `rss`, durable local-memory tools, and externally hosted tools. |
 | MCP (Model Context Protocol) | `17`, `23`, `26` | Local stdio MCP tools, remote MCP tools, Exa MCP web search, and Elastic Agent Builder MCP tools for searching WAF logs. |
 | HITL (Human in the Loop) | `11`, `12` | CLI approval with `handoff_to_user` and browser approval with Strands interrupts before a sensitive `send_email` tool runs. |
-| Streaming UI / SSE | `12`, `13`, `26` | Browser apps that stream tokens and status updates with FastAPI and Server-Sent Events. |
-| Document extraction / RAG prep | `13`-`15`, `24`, `25`, `26` | Unstructured PDF extraction, element-level JSONL, source-attributed prompt chunks, and PDF/URL threat-report context. |
-| Cyber detection / policy review | `26`-`28` | WAF log investigation, detection engineering from telemetry, and IAM least-privilege review. |
+| Streaming UI / SSE | `12`, `13`, `26`, `29` | Browser apps that stream tokens and status updates with FastAPI and Server-Sent Events. |
+| Document extraction / RAG prep | `13`-`15`, `24`, `25`, `26`, `29` | Unstructured PDF extraction, element-level JSONL, source-attributed prompt chunks, and PDF/URL threat-report context. |
+| Cyber detection / policy review | `26`-`29` | WAF log investigation, detection engineering, IAM least-privilege review, threat-intel mapping, and risk analysis. |
 | Guardrails and safety controls | `06`, `11`, `12`, `19` | Bedrock guardrails, approval gates for sensitive actions, and DockerSandbox-based static code triage. |
 | Voice / bidirectional streaming | `18` | Amazon Nova Sonic through Strands bidirectional streaming with microphone/speaker IO. |
 
@@ -50,6 +50,7 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 | `examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py` | Claude Haiku 4.5 by default | Strands MCP · `bedrock-runtime` + Elastic Agent Builder MCP | FastAPI + SSE WAF investigation UI over Elastic Cloud logs; model can be overridden with `BEDROCK_MODEL_ID` |
 | `examples/cybersecurity/27_strands_detection_engineering.py` | GPT OSS 120B | Strands structured output · `bedrock-runtime` | Turns JSONL/CSV security telemetry into findings, Sigma-style detections, ECS-aware Elastic hunts, and response actions using official SigmaHQ examples as references |
 | `examples/cybersecurity/28_strands_iam_policy_risk_review.py` | GPT OSS 120B | Strands structured output · `bedrock-runtime` | Reviews IAM policy JSON for wildcard permissions, privilege-escalation paths, and least-privilege fixes |
+| `examples/cybersecurity/29_strands_threat_intel_risk_chat.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Interactive CLI or FastAPI/SSE WebUI threat-intel and risk chat with CVE/EUVD, CWE/CAPEC, ATT&CK/ATLAS, OWASP Top 10 2025/2021, cached Security Cards/Unified Kill Chain PDF references, FAIR Monte Carlo ALE, and ROSI tools |
 
 ## Setup
 
@@ -59,7 +60,7 @@ uv sync
 
 ### Unstructured system dependencies
 
-Files `13`-`15` and `24`-`26` use Unstructured for PDF extraction and document
+Files `13`-`15`, `24`-`26`, and `29` use Unstructured for PDF extraction and document
 partitioning. For maximum compatibility, install the native tools Unstructured
 relies on for file detection, PDFs, OCR, Office documents, and other document
 formats:
@@ -184,6 +185,7 @@ The mantle endpoint uses two different base paths depending on the model:
 
 - `examples/cybersecurity/27_strands_detection_engineering.py` demonstrates a structured detection-engineering workflow. The agent uses local tools to summarize event samples, fetch official SigmaHQ examples as style references, validate Sigma-style rule sections, fetch current Elastic ECS fields, and validate Elastic KQL/ES|QL fields before returning a typed detection pack with findings, detection logic, hunts, response actions, assumptions, and a validation plan. It includes a built-in sample and also accepts JSONL or CSV event files.
 - `examples/cybersecurity/28_strands_iam_policy_risk_review.py` demonstrates structured IAM least-privilege review. The agent uses local policy-analysis tools to identify wildcard actions/resources and sensitive permissions such as `iam:PassRole`, then returns a typed risk review with practical fixes and candidate condition keys.
+- `examples/cybersecurity/29_strands_threat_intel_risk_chat.py` runs an interactive threat-intel chat agent in CLI mode or with `--web` as a FastAPI/SSE browser chat on `http://127.0.0.1:8003`. It can enrich CVE/EUVD records through Shodan CVEDB, pull bounded CWE/CAPEC definition excerpts from MITRE pages, search MITRE ATT&CK Enterprise STIX data, search MITRE ATLAS data, map scenarios to OWASP Top 10:2025 or 2021, generate STRIDE/PASTA/Lockheed Kill Chain/Unified Kill Chain/Security Cards prompts, extract the official Security Cards and Unified Kill Chain PDFs to cached markdown under `downloads/threat_model_refs/`, run FAIR-style Monte Carlo ALE simulations, and calculate ROSI to help justify security tool or control cost.
 
 ## Run examples
 
@@ -206,7 +208,23 @@ uv run python examples/cybersecurity/27_strands_detection_engineering.py
 uv run python examples/cybersecurity/27_strands_detection_engineering.py --events ./events.jsonl
 uv run python examples/cybersecurity/28_strands_iam_policy_risk_review.py
 uv run python examples/cybersecurity/28_strands_iam_policy_risk_review.py --policy ./policy.json
+uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py
+uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --prompt "Tell me about CVE-2023-34362 and map it to CWE, ATT&CK, OWASP, STRIDE, and FAIR."
+uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --web
 ```
+
+For richer Bedrock Runtime Strands examples, override the default model with
+`BEDROCK_MODEL_ID`:
+
+```bash
+BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
+  uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --web
+```
+
+This applies to files `06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and
+`26`-`29`. The smallest hello-world examples, Mantle path-specific examples,
+and Nova Sonic voice example keep fixed model IDs because their purpose or
+transport is model-specific.
 
 Each numbered example writes DEBUG logs for the current run to a `logs/`
 directory beside the script, replacing the previous contents at startup. Those logs
@@ -222,6 +240,7 @@ Web examples:
 uv run python examples/agents/12_strands_webui_sse_hitl.py        # http://localhost:8000
 uv run python examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py     # http://localhost:8001
 uv run python examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py    # http://localhost:8002
+uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --web  # http://localhost:8003
 ```
 
 Elastic Agent Builder MCP setup for file `26`:
@@ -233,7 +252,6 @@ export ELASTIC_API_KEY=...
 # Optional alternatives / overrides:
 export ELASTIC_AGENT_BUILDER_MCP_URL=https://your-kibana.example/api/agent_builder/mcp
 export ELASTIC_KIBANA_SPACE=default
-export BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
 export ELASTIC_WAF_DATA_CONTEXT="Start with AWS WAF data streams, but inspect related CDN and ALB logs when useful."
 ```
 

@@ -38,7 +38,7 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 
 REGION = "us-east-1"
-MODEL_ID = "openai.gpt-oss-120b-1:0"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "openai.gpt-oss-120b-1:0")
 MAX_EVENTS = 200
 MAX_EVENT_CHARS = 60_000
 MAX_SIGMA_EXAMPLES = 3
