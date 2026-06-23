@@ -45,14 +45,13 @@ from contextlib import ExitStack
 from urllib.parse import urlparse
 
 import boto3
-import httpx
 import markdownify
 import requests as _requests
 import uvicorn
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
@@ -256,14 +255,14 @@ def _make_elastic_mcp_client() -> MCPClient:
     if not auth_header:
         raise RuntimeError("Set ELASTIC_API_KEY or ELASTIC_AUTH_HEADER before running this app.")
 
+    @asynccontextmanager
+    async def elastic_transport():
+        async with create_mcp_http_client(headers={"Authorization": auth_header}) as http_client:
+            async with streamable_http_client(url=url, http_client=http_client) as streams:
+                yield streams
+
     LOGGER.debug("Configuring Elastic Agent Builder MCP client for %s", url)
-    return MCPClient(
-        lambda: streamable_http_client(
-            url=url,
-            http_client=httpx.AsyncClient(headers={"Authorization": auth_header}),
-        ),
-        startup_timeout=REQUEST_TIMEOUT_SECONDS,
-    )
+    return MCPClient(elastic_transport, startup_timeout=REQUEST_TIMEOUT_SECONDS)
 
 
 def _make_agent(tools) -> Agent:
