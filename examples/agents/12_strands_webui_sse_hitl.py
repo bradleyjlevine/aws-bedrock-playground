@@ -222,10 +222,13 @@ HTML_PAGE = """\
     .msg { margin: 0.6rem 0; white-space: pre-wrap; line-height: 1.4; }
     .user { color: #0066cc; }
     .assistant { color: #1d1d1f; white-space: normal; }
-    .assistant h1, .assistant h2, .assistant h3 {
+    .assistant h1, .assistant h2, .assistant h3, .assistant h4, .assistant h5, .assistant h6 {
       margin: 0.35rem 0 0.25rem; line-height: 1.25; font-size: 1rem;
     }
     .assistant h1 { font-size: 1.08rem; }
+    .assistant h4 { font-size: 0.96rem; }
+    .assistant h5 { font-size: 0.92rem; }
+    .assistant h6 { font-size: 0.9rem; color: #6e6e73; }
     .assistant p { margin: 0.35rem 0; }
     .assistant ul, .assistant ol { margin: 0.35rem 0 0.55rem 1.25rem; padding: 0; }
     .assistant li { margin: 0.18rem 0; }
@@ -361,7 +364,7 @@ function renderLooseTable(lines, start) {
 
 function normalizeMarkdown(markdown) {
   return markdown
-    .replace(/([^\\n])\\s*(#{1,3}\\s+)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(#{1,6}\\s+)/g, "$1\\n\\n$2")
     .replace(/([^\\n])\\s*(---+|___+|\\*\\*\\*+)\\s*(?=\\n|$)/g, "$1\\n\\n$2")
     .replace(/([^\\n])\\s*(```)/g, "$1\\n\\n$2")
     .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\\.)/g, "$1\\n\\n$2")
@@ -372,7 +375,7 @@ function repairMarkdownLines(lines) {
   const repaired = [];
   for (let i = 0; i < lines.length; i += 1) {
     const trimmed = lines[i].trim();
-    if (/^#{1,3}$/.test(trimmed)) {
+    if (/^#{1,6}$/.test(trimmed)) {
       let j = i + 1;
       while (j < lines.length && !lines[j].trim()) j += 1;
       if (j < lines.length) {
@@ -444,7 +447,7 @@ function renderMarkdown(markdown) {
         continue;
       }
     }
-    const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,6})\\s+(.+)$/);
     if (heading) {
       flushParagraph(); closeList();
       const level = heading[1].length;

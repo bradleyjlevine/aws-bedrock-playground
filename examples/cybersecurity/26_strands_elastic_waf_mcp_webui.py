@@ -525,14 +525,20 @@ HTML_PAGE = """\
     .bubble.error { background: #fff5f5; color: #7d1f1f; border-left: 4px solid #d93025; }
     .bubble-label { color: #687789; font-size: 0.74rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.35rem; }
     .bubble-body { overflow-wrap: anywhere; }
-    #answer h1, #answer h2, #answer h3 { letter-spacing: 0; line-height: 1.25; margin: 1.2rem 0 0.45rem; }
+    #answer h1, #answer h2, #answer h3, #answer h4, #answer h5, #answer h6 { letter-spacing: 0; line-height: 1.25; margin: 1.2rem 0 0.45rem; }
     #answer .bubble-body > h1:first-child,
     #answer .bubble-body > h2:first-child,
     #answer .bubble-body > h3:first-child,
+    #answer .bubble-body > h4:first-child,
+    #answer .bubble-body > h5:first-child,
+    #answer .bubble-body > h6:first-child,
     #answer .bubble-body > p:first-child { margin-top: 0; }
     #answer h1 { font-size: 1.25rem; }
     #answer h2 { font-size: 1.1rem; }
     #answer h3 { font-size: 1rem; }
+    #answer h4 { font-size: 0.96rem; }
+    #answer h5 { font-size: 0.92rem; }
+    #answer h6 { font-size: 0.9rem; color: #405064; }
     #answer p { margin: 0.45rem 0 0.8rem; }
     #answer ul, #answer ol { padding-left: 1.45rem; }
     #answer li { margin: 0.3rem 0; }
@@ -704,7 +710,7 @@ function renderLooseTable(lines, start) {
 
 function normalizeMarkdown(markdown) {
   return markdown
-    .replace(/([^\\n])\\s*(#{1,3}\\s+)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(#{1,6}\\s+)/g, "$1\\n\\n$2")
     .replace(/([^\\n])\\s*(---+|___+|\\*\\*\\*+)\\s*(?=\\n|$)/g, "$1\\n\\n$2")
     .replace(/([^\\n])\\s*(```)/g, "$1\\n\\n$2")
     .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\\.)/g, "$1\\n\\n$2")
@@ -715,7 +721,7 @@ function repairMarkdownLines(lines) {
   const repaired = [];
   for (let i = 0; i < lines.length; i += 1) {
     const trimmed = lines[i].trim();
-    if (/^#{1,3}$/.test(trimmed)) {
+    if (/^#{1,6}$/.test(trimmed)) {
       let j = i + 1;
       while (j < lines.length && !lines[j].trim()) j += 1;
       if (j < lines.length) {
@@ -792,7 +798,7 @@ function renderMarkdown(markdown) {
         continue;
       }
     }
-    const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,6})\\s+(.+)$/);
     if (heading) {
       flushParagraph(); closeList();
       const level = heading[1].length;

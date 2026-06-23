@@ -414,10 +414,14 @@ HTML_PAGE = """\
       margin: 1.4rem 0 0.55rem; line-height: 1.25; letter-spacing: 0;
       padding-top: 0.85rem; border-top: 1px solid #ececf1;
     }
-    #output h1:first-child, #output h2:first-child, #output h3:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+    #output h1:first-child, #output h2:first-child, #output h3:first-child,
+    #output h4:first-child, #output h5:first-child, #output h6:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
     #output h1 { font-size: 1.35rem; }
     #output h2 { font-size: 1.12rem; }
     #output h3 { font-size: 1rem; }
+    #output h4 { font-size: 0.96rem; }
+    #output h5 { font-size: 0.92rem; }
+    #output h6 { font-size: 0.9rem; color: #6e6e73; }
     #output p { margin: 0.45rem 0 0.85rem; }
     #output ul, #output ol { margin: 0.35rem 0 1rem; padding-left: 1.5rem; }
     #output li { margin: 0.35rem 0; }
@@ -569,7 +573,7 @@ function renderLooseTable(lines, start) {
 
 function normalizeMarkdown(markdown) {
   return markdown
-    .replace(/([^\\n])\\s*(#{1,3}\\s+)/g, "$1\\n\\n$2")
+    .replace(/([^\\n])\\s*(#{1,6}\\s+)/g, "$1\\n\\n$2")
     .replace(/([^\\n])\\s*(---+|___+|\\*\\*\\*+)\\s*(?=\\n|$)/g, "$1\\n\\n$2")
     .replace(/([^\\n])\\s*(```)/g, "$1\\n\\n$2")
     .replace(/([.!?\\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\\.)/g, "$1\\n\\n$2")
@@ -580,7 +584,7 @@ function repairMarkdownLines(lines) {
   const repaired = [];
   for (let i = 0; i < lines.length; i += 1) {
     const trimmed = lines[i].trim();
-    if (/^#{1,3}$/.test(trimmed)) {
+    if (/^#{1,6}$/.test(trimmed)) {
       let j = i + 1;
       while (j < lines.length && !lines[j].trim()) j += 1;
       if (j < lines.length) {
@@ -674,7 +678,7 @@ function renderMarkdown(markdown) {
       }
     }
 
-    const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
+    const heading = trimmed.match(/^(#{1,6})\\s+(.+)$/);
     if (heading) {
       flushParagraph();
       closeList();
