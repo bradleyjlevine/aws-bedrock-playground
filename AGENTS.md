@@ -12,12 +12,15 @@ Hello-world examples for AWS Bedrock: foundation models, agents, and the bedrock
 uv sync                        # install dependencies
 uv run python examples/<group>/<file>.py        # run a script
 AWS_PROFILE=<profile> uv run python examples/<group>/<file>.py  # run with a specific SSO profile
+node scripts/check_webui_markdown.js            # validate shared WebUI Markdown rendering
 ```
 
 ## Project structure
 
 ```
 auth.py                        # shared auth helper — DO NOT modify without reading the note below
+webui_markdown.py              # shared browser-side Markdown renderer for WebUI examples
+scripts/check_webui_markdown.js # Node QA script for WebUI Markdown rendering
 examples/core/                 # Bedrock Runtime basics and guardrails
 examples/mantle/               # bedrock-mantle examples and Strands mantle adapters
 examples/agents/               # Strands agent, tool, MCP, swarm, workflow, and HITL examples
@@ -147,6 +150,11 @@ Any callable `(**kwargs)` works as `callback_handler=`. Key kwargs:
 
 ### WebUI streaming (file 12)
 For browser/server scenarios, set `callback_handler=None` and consume `agent.stream_async(prompt)` directly — each yielded event has the same `data` / `event` shape, but you control where the bytes go. File 12 wraps each event into a JSON SSE frame (`data: {...}\n\n`) so the browser can render tokens incrementally with `fetch().body.getReader()`.
+
+### WebUI Markdown rendering (files 12, 13, 26, 29)
+The browser UIs share `webui_markdown.py` for dependency-free client-side Markdown rendering. Do not paste or fork `renderMarkdown()` inside individual HTML strings; import `MARKDOWN_RENDERER_JS` and inject it into the page. When changing Markdown behavior or presentation, update the shared renderer and run `node scripts/check_webui_markdown.js`.
+
+The QA script covers representative streamed model output: headings, paragraphs, inline code, emphasis, strikethrough, links/autolinks, blockquotes, ordered/unordered/task lists, strict and loose tables, escaped table pipes, fenced code blocks, partial streaming chunks, and HTML/script escaping.
 
 ### Human-in-the-loop (files 11, 12)
 Two different mechanisms for the same pattern — the agent must get user approval before performing a sensitive action.
