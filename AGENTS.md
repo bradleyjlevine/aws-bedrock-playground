@@ -51,7 +51,7 @@ examples/document-processing/25_pdf_elements_to_prompt_chunks.py # Unstructured 
 examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastAPI: WAF log search via Elastic Agent Builder MCP
 examples/cybersecurity/27_strands_detection_engineering.py # Strands structured output: telemetry -> Sigma-style detections + hunts
 examples/cybersecurity/28_strands_iam_policy_risk_review.py # Strands structured output: IAM policy risk + least-privilege review
-examples/cybersecurity/29_strands_threat_intel_risk_chat.py # Strands CLI/WebUI chat: threat intel, cached PDF framework refs, FAIR ALE/ROSI risk analysis
+examples/cybersecurity/29_strands_threat_intel_risk_chat.py # Strands CLI/WebUI chat: threat intel, paginated ATT&CK/ATLAS tools, cached PDF framework refs, FAIR ALE/ROSI risk analysis
 examples/agents/sessions/      # Created by 09/16 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
@@ -129,6 +129,9 @@ The decorator reads the function's type annotations and docstring to build the B
 
 ### Vulnerability lookup tools (files 14, 15)
 Files 14 and 15 define `lookup_cve` and `lookup_euvd` Strands tools backed by Shodan CVEDB's `/cve/{cve_id}` and `/euvd/{euvd_id}` endpoints. Keep the output bounded; references and CPEs are intentionally capped before returning to the model.
+
+### Threat-intel framework tools (file 29)
+File 29 uses public data sources but keeps tool outputs bounded. ATT&CK Enterprise data is loaded from official STIX and indexed into tactics, techniques, software, groups, and `uses` relationships. ATLAS data is indexed from the `mitre-atlas/atlas-data` GitHub tree and classified by path into tactics, techniques, case studies, mitigations, software/tool records, or generic records. Keep all list/search tools paginated with `limit` and `offset`, capped at a small page size, and return `next_offset` metadata. For exact ATLAS file contents, use `lookup_atlas_record(path)` rather than increasing search result sizes.
 
 ### Strands FileSessionManager (file 09)
 Pass `session_manager=` and `agent_id=` to `Agent`. The session files land under `storage_dir/session_<session_id>/agents/agent_<agent_id>/messages/`. The directory persists between runs; delete it to start fresh.

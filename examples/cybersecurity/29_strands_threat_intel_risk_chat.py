@@ -591,30 +591,114 @@ def _fallback_capec_html(capec_num: str) -> dict[str, str]:
 
 
 @lru_cache(maxsize=1)
-def load_attack_patterns() -> list[dict[str, Any]]:
+def load_attack_data() -> dict[str, Any]:
     bundle = _http_json(ATTACK_STIX_URL)
-    patterns = []
-    for item in bundle.get("objects", []):
-        if item.get("type") != "attack-pattern" or item.get("revoked") or item.get("x_mitre_deprecated"):
-            continue
-        external_id = None
-        url = None
+    techniques = []
+    tactics = []
+    software = []
+    groups = []
+    by_ref: dict[str, dict[str, Any]] = {}
+    by_external_id: dict[str, dict[str, Any]] = {}
+    relationships = []
+
+    def mitre_reference(item: dict[str, Any]) -> tuple[str | None, str | None]:
         for ref in item.get("external_references", []):
             if ref.get("source_name") == "mitre-attack":
-                external_id = ref.get("external_id")
-                url = ref.get("url")
-                break
-        patterns.append(
-            {
+                return ref.get("external_id"), ref.get("url")
+        return None, None
+
+    def aliases(item: dict[str, Any]) -> list[str]:
+        names = []
+        for alias in item.get("aliases", []):
+            if isinstance(alias, str) and alias != item.get("name"):
+                names.append(alias)
+        return names[:10]
+
+    for item in bundle.get("objects", []):
+        if item.get("revoked") or item.get("x_mitre_deprecated"):
+            continue
+        item_type = item.get("type")
+        if item_type == "relationship" and item.get("relationship_type") == "uses":
+            relationships.append(
+                {
+                    "source_ref": item.get("source_ref"),
+                    "target_ref": item.get("target_ref"),
+                    "description": item.get("description", "")[:900],
+                }
+            )
+            continue
+
+        external_id, url = mitre_reference(item)
+        summary: dict[str, Any] | None = None
+        if item_type == "attack-pattern":
+            summary = {
+                "type": "technique",
                 "id": external_id,
+                "stix_id": item.get("id"),
                 "name": item.get("name"),
                 "description": item.get("description", "")[:1_200],
                 "tactics": item.get("kill_chain_phases", []),
                 "platforms": item.get("x_mitre_platforms", [])[:8],
+                "data_sources": item.get("x_mitre_data_sources", [])[:8],
                 "url": url,
             }
-        )
-    return patterns
+            techniques.append(summary)
+        elif item_type == "x-mitre-tactic":
+            summary = {
+                "type": "tactic",
+                "id": external_id,
+                "stix_id": item.get("id"),
+                "name": item.get("name"),
+                "shortname": item.get("x_mitre_shortname"),
+                "description": item.get("description", "")[:1_000],
+                "url": url,
+            }
+            tactics.append(summary)
+        elif item_type in {"malware", "tool"}:
+            summary = {
+                "type": "software",
+                "software_type": item_type,
+                "id": external_id,
+                "stix_id": item.get("id"),
+                "name": item.get("name"),
+                "aliases": aliases(item),
+                "description": item.get("description", "")[:1_000],
+                "platforms": item.get("x_mitre_platforms", [])[:8],
+                "url": url,
+            }
+            software.append(summary)
+        elif item_type == "intrusion-set":
+            summary = {
+                "type": "group",
+                "id": external_id,
+                "stix_id": item.get("id"),
+                "name": item.get("name"),
+                "aliases": aliases(item),
+                "description": item.get("description", "")[:1_000],
+                "url": url,
+            }
+            groups.append(summary)
+
+        if summary:
+            by_ref[str(item.get("id"))] = summary
+            if external_id:
+                by_external_id[str(external_id).upper()] = summary
+
+    return {
+        "source": ATTACK_STIX_URL,
+        "techniques": techniques,
+        "tactics": tactics,
+        "software": software,
+        "groups": groups,
+        "relationships": relationships,
+        "by_ref": by_ref,
+        "by_external_id": by_external_id,
+    }
+
+
+@lru_cache(maxsize=1)
+def load_attack_patterns() -> list[dict[str, Any]]:
+    return load_attack_data()["techniques"]
 
 
 @lru_cache(maxsize=1)
@@ -626,26 +710,164 @@ def attack_patterns_by_id() -> dict[str, dict[str, Any]]:
     }
 
 
-@lru_cache(maxsize=16)
-def load_atlas_records(query: str) -> list[dict[str, Any]]:
+def _attack_records(kind: str) -> list[dict[str, Any]]:
+    data = load_attack_data()
+    if kind == "technique":
+        return data["techniques"]
+    if kind == "tactic":
+        return data["tactics"]
+    if kind == "software":
+        return data["software"]
+    if kind == "group":
+        return data["groups"]
+    return data["techniques"] + data["tactics"] + data["software"] + data["groups"]
+
+
+def _attack_record_text(record: dict[str, Any]) -> str:
+    tactics = " ".join(phase.get("phase_name", "") for phase in record.get("tactics", []))
+    return " ".join(
+        [
+            str(record.get("id") or ""),
+            str(record.get("name") or ""),
+            " ".join(record.get("aliases", [])),
+            str(record.get("description") or ""),
+            tactics,
+            " ".join(record.get("platforms", [])),
+            str(record.get("shortname") or ""),
+        ]
+    )
+
+
+def _find_attack_records(kind: str, query: str, limit: int = 5) -> list[dict[str, Any]]:
+    terms = {term for term in re.findall(r"[a-z0-9.]+", query.lower()) if len(term) > 1}
+    explicit_ids = {match.upper() for match in re.findall(r"\b(?:T\d{4}(?:\.\d{3})?|TA\d{4}|S\d{4}|G\d{4})\b", query, re.IGNORECASE)}
+    ranked = []
+    for record in _attack_records(kind):
+        record_id = str(record.get("id") or "").upper()
+        exact_score = 20 if record_id in explicit_ids else 0
+        name = str(record.get("name") or "").lower()
+        alias_score = 10 if query.strip().lower() in {name, *(alias.lower() for alias in record.get("aliases", []))} else 0
+        keyword_score = _score_text(terms, _attack_record_text(record))
+        score = exact_score + alias_score + keyword_score
+        if score:
+            ranked.append((score, record_id, record))
+    return [record for _, _, record in sorted(ranked, key=lambda item: (item[0], item[1]), reverse=True)[:limit]]
+
+
+def _page_bounds(limit: int, offset: int, max_limit: int = 25) -> tuple[int, int]:
+    return max(1, min(limit, max_limit)), max(0, offset)
+
+
+def _page_items(items: list[dict[str, Any]], limit: int, offset: int, key: str) -> dict[str, Any]:
+    capped_limit, safe_offset = _page_bounds(limit, offset)
+    page = items[safe_offset : safe_offset + capped_limit]
+    next_offset = safe_offset + len(page) if safe_offset + len(page) < len(items) else None
+    return {
+        "count": len(items),
+        "limit": capped_limit,
+        "offset": safe_offset,
+        "returned": len(page),
+        "next_offset": next_offset,
+        key: page,
+    }
+
+
+def _attack_uses(source: dict[str, Any], target_kind: str) -> list[dict[str, Any]]:
+    data = load_attack_data()
+    by_ref = data["by_ref"]
+    source_ref = source.get("stix_id")
+    matches = []
+    for relationship in data["relationships"]:
+        if relationship.get("source_ref") != source_ref:
+            continue
+        target = by_ref.get(str(relationship.get("target_ref")))
+        if not target or target.get("type") != target_kind:
+            continue
+        matches.append({**target, "relationship_description": relationship.get("description")})
+    return sorted(matches, key=lambda item: str(item.get("id") or item.get("name") or ""))
+
+
+def _atlas_kind_from_path(path: str) -> str:
+    normalized = path.lower()
+    if "case-stud" in normalized or "studies/" in normalized:
+        return "case_study"
+    if "technique" in normalized:
+        return "technique"
+    if "tactic" in normalized:
+        return "tactic"
+    if "mitigation" in normalized:
+        return "mitigation"
+    if "software" in normalized or "tool" in normalized:
+        return "software"
+    return "record"
+
+
+def _atlas_name_from_path(path: str) -> str:
+    stem = Path(path).stem
+    return SPACE_RE.sub(" ", stem.replace("_", " ").replace("-", " ")).strip()
+
+
+@lru_cache(maxsize=1)
+def load_atlas_index() -> dict[str, Any]:
     tree = _http_json(ATLAS_TREE_URL)
-    terms = {term for term in re.findall(r"[a-z0-9]+", query.lower()) if len(term) > 2}
-    candidates = []
+    records = []
     for item in tree.get("tree", []):
         path = item.get("path", "")
         if item.get("type") != "blob" or not path.endswith((".yaml", ".yml", ".json", ".md")):
             continue
-        score = _score_text(terms, path)
-        if score:
-            candidates.append((score, path))
-    records = []
-    for _, path in sorted(candidates, reverse=True)[:5]:
+        records.append(
+            {
+                "kind": _atlas_kind_from_path(path),
+                "path": path,
+                "name": _atlas_name_from_path(path),
+                "source": f"https://github.com/mitre-atlas/atlas-data/blob/main/{path}",
+                "raw_url": f"{ATLAS_RAW_BASE}/{path}",
+            }
+        )
+    records.sort(key=lambda item: (item["kind"], item["path"]))
+    return {
+        "source": "https://github.com/mitre-atlas/atlas-data",
+        "records": records,
+        "kinds": sorted({record["kind"] for record in records}),
+    }
+
+
+def _atlas_records(kind: str = "all") -> list[dict[str, Any]]:
+    records = load_atlas_index()["records"]
+    normalized = kind.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in {"all", "any", ""}:
+        return records
+    return [record for record in records if record.get("kind") == normalized]
+
+
+@lru_cache(maxsize=512)
+def _atlas_record_text(raw_url: str, max_chars: int = 4_000) -> str:
+    return _http_text(raw_url)[:max_chars]
+
+
+def _find_atlas_records(query: str, kind: str = "all", limit: int = 100) -> list[dict[str, Any]]:
+    terms = {term for term in re.findall(r"[a-z0-9]+", query.lower()) if len(term) > 2}
+    ranked = []
+    for record in _atlas_records(kind):
         try:
-            content = _http_text(f"{ATLAS_RAW_BASE}/{path}")[:2_000]
+            content = _atlas_record_text(str(record["raw_url"]))
+        except (OSError, URLError, UnicodeDecodeError):
+            content = ""
+        score = _score_text(terms, record.get("path", ""), record.get("name", ""), record.get("kind", ""), content)
+        if score:
+            ranked.append((score, record.get("path", ""), record))
+    return [record for _, _, record in sorted(ranked, key=lambda item: (item[0], item[1]), reverse=True)[:limit]]
+
+
+def _atlas_with_excerpt(records: list[dict[str, Any]], max_chars: int = 1_500) -> list[dict[str, Any]]:
+    enriched = []
+    for record in records:
+        try:
+            excerpt = _atlas_record_text(str(record["raw_url"]), max_chars=max_chars)
         except (OSError, URLError, UnicodeDecodeError) as exc:
-            content = f"Fetch error: {exc}"
-        records.append({"path": path, "source": f"https://github.com/mitre-atlas/atlas-data/blob/main/{path}", "excerpt": content})
-    return records
+            excerpt = f"Fetch error: {exc}"
+        enriched.append({**record, "excerpt": excerpt})
+    return enriched
 
 
 @tool
@@ -814,14 +1036,16 @@ def search_capec(query: str) -> dict[str, Any]:
 
 
 @tool
-def search_attack(query: str) -> dict[str, Any]:
+def search_attack(query: str, limit: int = 5, offset: int = 0) -> dict[str, Any]:
     """Search MITRE ATT&CK Enterprise techniques.
 
     Args:
         query: Technique ID, technique name, tactic, vulnerability behavior, or adversary behavior.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
 
     Returns:
-        Up to five matching ATT&CK technique summaries from official STIX data.
+        Paginated ATT&CK technique summaries from official STIX data.
     """
     try:
         patterns = load_attack_patterns()
@@ -862,26 +1086,462 @@ def search_attack(query: str) -> dict[str, Any]:
     return {
         "source": ATTACK_STIX_URL,
         "requested_or_inferred_attack_ids": sorted(requested_ids),
-        "match_count": len(matches),
-        "matches": matches,
+        **_page_items(matches, limit, offset, "matches"),
     }
 
 
 @tool
-def search_atlas(query: str) -> dict[str, Any]:
+def list_attack_tactics(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATT&CK Enterprise tactics.
+
+    Args:
+        limit: Maximum tactics to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated Enterprise ATT&CK tactics with IDs, short names, descriptions, and source URLs.
+    """
+    try:
+        tactics = load_attack_data()["tactics"]
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "tactics": []}
+    return {"source": ATTACK_STIX_URL, **_page_items(tactics, limit, offset, "tactics")}
+
+
+@tool
+def search_attack_tactics(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATT&CK Enterprise tactics by ID, name, short name, or description.
+
+    Args:
+        query: Tactic ID, tactic name, short name, or behavior phrase.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATT&CK tactic summaries from official STIX data.
+    """
+    try:
+        matches = _find_attack_records("tactic", query, limit=100)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": query, **_page_items(matches, limit, offset, "matches")}
+
+
+@tool
+def search_attack_techniques(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATT&CK Enterprise techniques by ID, name, tactic, platform, or behavior.
+
+    Args:
+        query: Technique ID, technique name, tactic, platform, vulnerability behavior, or adversary behavior.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATT&CK technique summaries from official STIX data.
+    """
+    try:
+        matches = _find_attack_records("technique", query, limit=100)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": query, **_page_items(matches, limit, offset, "matches")}
+
+
+@tool
+def list_attack_techniques(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATT&CK Enterprise techniques.
+
+    Args:
+        limit: Maximum techniques to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATT&CK technique summaries with IDs, names, tactics, platforms, and source URLs.
+    """
+    try:
+        techniques = sorted(load_attack_data()["techniques"], key=lambda item: str(item.get("id") or item.get("name") or ""))
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "techniques": []}
+    return {"source": ATTACK_STIX_URL, **_page_items(techniques, limit, offset, "techniques")}
+
+
+@tool
+def search_attack_software(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATT&CK Enterprise software, including malware and tools.
+
+    Args:
+        query: Software ID, malware/tool name, alias, platform, or behavior.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATT&CK software summaries from official STIX data.
+    """
+    try:
+        matches = _find_attack_records("software", query, limit=100)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": query, **_page_items(matches, limit, offset, "matches")}
+
+
+@tool
+def list_attack_software(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATT&CK Enterprise software, including malware and tools.
+
+    Args:
+        limit: Maximum software records to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATT&CK software summaries with IDs, names, aliases, type, platforms, and source URLs.
+    """
+    try:
+        software = sorted(load_attack_data()["software"], key=lambda item: str(item.get("id") or item.get("name") or ""))
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "software": []}
+    return {"source": ATTACK_STIX_URL, **_page_items(software, limit, offset, "software")}
+
+
+@tool
+def search_attack_groups(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATT&CK Enterprise groups and threat actors.
+
+    Args:
+        query: Group ID such as G0016, intrusion-set name, threat actor name, alias, region, or behavior.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATT&CK group summaries with MITRE group IDs, aliases, and source URLs.
+    """
+    try:
+        matches = _find_attack_records("group", query, limit=100)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": query, **_page_items(matches, limit, offset, "matches")}
+
+
+@tool
+def list_attack_groups(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATT&CK Enterprise groups and threat actors.
+
+    Args:
+        limit: Maximum groups to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATT&CK group summaries with MITRE group IDs, primary names, aliases, descriptions, and source URLs.
+    """
+    try:
+        groups = sorted(load_attack_data()["groups"], key=lambda item: str(item.get("id") or item.get("name") or ""))
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "groups": []}
+    return {"source": ATTACK_STIX_URL, **_page_items(groups, limit, offset, "groups")}
+
+
+@tool
+def attack_software_used_by_group(group: str, limit: int = 10, offset: int = 0) -> dict[str, Any]:
+    """List ATT&CK software used by a group or threat actor.
+
+    Args:
+        group: ATT&CK group ID, group name, intrusion-set name, or threat actor alias.
+        limit: Maximum software records per matched group to return in this page, capped at 25.
+        offset: Zero-based software offset for pagination within each matched group.
+
+    Returns:
+        Matching group records and paginated malware/tools they use according to ATT&CK STIX relationships.
+    """
+    try:
+        groups = _find_attack_records("group", group, limit=3)
+        results = [
+            {"group": item, **_page_items(_attack_uses(item, "software"), limit, offset, "software")}
+            for item in groups
+        ]
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": group, "match_count": len(results), "matches": results}
+
+
+@tool
+def attack_techniques_used_by_group(group: str, limit: int = 10, offset: int = 0) -> dict[str, Any]:
+    """List ATT&CK techniques used by a group or threat actor.
+
+    Args:
+        group: ATT&CK group ID, group name, intrusion-set name, or threat actor alias.
+        limit: Maximum technique records per matched group to return in this page, capped at 25.
+        offset: Zero-based technique offset for pagination within each matched group.
+
+    Returns:
+        Matching group records and paginated techniques they use according to ATT&CK STIX relationships.
+    """
+    try:
+        groups = _find_attack_records("group", group, limit=3)
+        results = [
+            {"group": item, **_page_items(_attack_uses(item, "technique"), limit, offset, "techniques")}
+            for item in groups
+        ]
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": group, "match_count": len(results), "matches": results}
+
+
+@tool
+def attack_groups_using_software(software: str, limit: int = 10, offset: int = 0) -> dict[str, Any]:
+    """List ATT&CK groups that use a malware family or tool.
+
+    Args:
+        software: ATT&CK software ID, malware/tool name, or alias.
+        limit: Maximum group records per matched software item to return in this page, capped at 25.
+        offset: Zero-based group offset for pagination within each matched software item.
+
+    Returns:
+        Matching software records and paginated groups that use them according to ATT&CK STIX relationships.
+    """
+    try:
+        software_matches = _find_attack_records("software", software, limit=3)
+        data = load_attack_data()
+        by_ref = data["by_ref"]
+        results = []
+        for software_item in software_matches:
+            groups = []
+            software_ref = software_item.get("stix_id")
+            for relationship in data["relationships"]:
+                if relationship.get("target_ref") != software_ref:
+                    continue
+                source = by_ref.get(str(relationship.get("source_ref")))
+                if source and source.get("type") == "group":
+                    groups.append({**source, "relationship_description": relationship.get("description")})
+            sorted_groups = sorted(groups, key=lambda item: str(item.get("id") or item.get("name") or ""))
+            results.append({"software": software_item, **_page_items(sorted_groups, limit, offset, "groups")})
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATTACK_STIX_URL, "error": str(exc), "matches": []}
+    return {"source": ATTACK_STIX_URL, "query": software, "match_count": len(results), "matches": results}
+
+
+def _list_atlas_kind(kind: str, limit: int, offset: int, key: str) -> dict[str, Any]:
+    records = _atlas_records(kind)
+    return {"source": load_atlas_index()["source"], "kind": kind, **_page_items(records, limit, offset, key)}
+
+
+def _search_atlas_kind(query: str, kind: str, limit: int, offset: int) -> dict[str, Any]:
+    matches = _find_atlas_records(query, kind=kind, limit=100)
+    page = _page_items(matches, limit, offset, "matches")
+    page["matches"] = _atlas_with_excerpt(page["matches"])
+    return {"source": load_atlas_index()["source"], "query": query, "kind": kind, **page}
+
+
+@tool
+def list_atlas_records(kind: str = "all", limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATLAS data records by kind.
+
+    Args:
+        kind: all, tactic, technique, case_study, mitigation, software, or record.
+        limit: Maximum records to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATLAS records with kind, path, name, and source URLs.
+    """
+    try:
+        return _list_atlas_kind(kind, limit, offset, "records")
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "records": []}
+
+
+@tool
+def search_atlas(query: str, kind: str = "all", limit: int = 8, offset: int = 0) -> dict[str, Any]:
     """Search MITRE ATLAS data files for AI/ML threat intelligence references.
 
     Args:
-        query: AI/ML threat behavior, tactic, technique, or risk phrase.
+        query: AI/ML threat behavior, tactic, technique, case study, mitigation, software, or risk phrase.
+        kind: all, tactic, technique, case_study, mitigation, software, or record.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
 
     Returns:
-        Bounded matching ATLAS data file excerpts.
+        Paginated matching ATLAS records with bounded raw-file excerpts for the current page.
     """
     try:
-        records = load_atlas_records(query)
+        return _search_atlas_kind(query, kind, limit, offset)
     except (OSError, URLError, json.JSONDecodeError) as exc:
         return {"source": ATLAS_TREE_URL, "error": str(exc), "matches": []}
-    return {"source": "https://github.com/mitre-atlas/atlas-data", "matches": records}
+
+
+@tool
+def list_atlas_tactics(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATLAS tactics.
+
+    Args:
+        limit: Maximum tactics to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATLAS tactic records with path, name, and source URLs.
+    """
+    try:
+        return _list_atlas_kind("tactic", limit, offset, "tactics")
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "tactics": []}
+
+
+@tool
+def search_atlas_tactics(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATLAS tactics.
+
+    Args:
+        query: Tactic name, path fragment, or AI/ML threat behavior.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATLAS tactics with bounded raw-file excerpts for the current page.
+    """
+    try:
+        return _search_atlas_kind(query, "tactic", limit, offset)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "matches": []}
+
+
+@tool
+def list_atlas_techniques(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATLAS techniques.
+
+    Args:
+        limit: Maximum techniques to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATLAS technique records with path, name, and source URLs.
+    """
+    try:
+        return _list_atlas_kind("technique", limit, offset, "techniques")
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "techniques": []}
+
+
+@tool
+def search_atlas_techniques(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATLAS techniques.
+
+    Args:
+        query: Technique name, path fragment, or AI/ML threat behavior.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATLAS techniques with bounded raw-file excerpts for the current page.
+    """
+    try:
+        return _search_atlas_kind(query, "technique", limit, offset)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "matches": []}
+
+
+@tool
+def list_atlas_case_studies(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATLAS case studies.
+
+    Args:
+        limit: Maximum case studies to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATLAS case study records with path, name, and source URLs.
+    """
+    try:
+        return _list_atlas_kind("case_study", limit, offset, "case_studies")
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "case_studies": []}
+
+
+@tool
+def search_atlas_case_studies(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATLAS case studies.
+
+    Args:
+        query: Case study name, path fragment, affected system, actor, or AI/ML incident phrase.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATLAS case studies with bounded raw-file excerpts for the current page.
+    """
+    try:
+        return _search_atlas_kind(query, "case_study", limit, offset)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "matches": []}
+
+
+@tool
+def list_atlas_mitigations(limit: int = 15, offset: int = 0) -> dict[str, Any]:
+    """List MITRE ATLAS mitigations.
+
+    Args:
+        limit: Maximum mitigations to return in this page, capped at 25.
+        offset: Zero-based record offset for pagination.
+
+    Returns:
+        Paginated ATLAS mitigation records with path, name, and source URLs.
+    """
+    try:
+        return _list_atlas_kind("mitigation", limit, offset, "mitigations")
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "mitigations": []}
+
+
+@tool
+def search_atlas_mitigations(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATLAS mitigations.
+
+    Args:
+        query: Mitigation name, path fragment, control, or AI/ML risk phrase.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATLAS mitigations with bounded raw-file excerpts for the current page.
+    """
+    try:
+        return _search_atlas_kind(query, "mitigation", limit, offset)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "matches": []}
+
+
+@tool
+def search_atlas_software(query: str, limit: int = 8, offset: int = 0) -> dict[str, Any]:
+    """Search MITRE ATLAS software or tool records when present in atlas-data.
+
+    Args:
+        query: Software/tool name, path fragment, or AI/ML system phrase.
+        limit: Maximum matches to return in this page, capped at 25.
+        offset: Zero-based match offset for pagination.
+
+    Returns:
+        Paginated matching ATLAS software/tool records with bounded raw-file excerpts for the current page.
+    """
+    try:
+        return _search_atlas_kind(query, "software", limit, offset)
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc), "matches": []}
+
+
+@tool
+def lookup_atlas_record(path: str) -> dict[str, Any]:
+    """Fetch one MITRE ATLAS data file by path.
+
+    Args:
+        path: Repository-relative path returned by an ATLAS list or search tool.
+
+    Returns:
+        ATLAS record metadata and a bounded raw-file excerpt.
+    """
+    try:
+        normalized = path.strip().lstrip("/")
+        record = next((item for item in load_atlas_index()["records"] if item["path"] == normalized), None)
+        if not record:
+            return {"source": ATLAS_TREE_URL, "path": normalized, "error": "ATLAS path not found in atlas-data tree."}
+        return {"source": load_atlas_index()["source"], "record": _atlas_with_excerpt([record], max_chars=3_000)[0]}
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        return {"source": ATLAS_TREE_URL, "error": str(exc)}
 
 
 @tool
@@ -1194,6 +1854,11 @@ def make_agent(stream_to_cli: bool = True) -> Agent:
             "You are a threat-intelligence and cyber-risk advisor. Use tools for live "
             "CVE/EUVD/CWE/CAPEC/ATT&CK/ATLAS lookups when identifiers or framework "
             "mapping is requested. Clearly separate sourced facts from inference. "
+            "For ATT&CK, use focused tools for tactics, techniques, software, and groups; "
+            "use the compound group/software relationship tools when the user asks what "
+            "a threat actor uses or which actors use a malware family or tool. "
+            "For ATLAS, use focused paginated tools for AI/ML tactics, techniques, "
+            "case studies, mitigations, software/tool records, and exact record lookup. "
             "Use search_capec for CAPEC mapping when the user provides a CWE ID, "
             "attack behavior, or vulnerability class but not a specific CAPEC ID. "
             "When mapping to OWASP, prefer OWASP Top 10:2025 as latest and compare "
@@ -1213,7 +1878,29 @@ def make_agent(stream_to_cli: bool = True) -> Agent:
             lookup_capec,
             search_capec,
             search_attack,
+            list_attack_tactics,
+            search_attack_tactics,
+            search_attack_techniques,
+            list_attack_techniques,
+            search_attack_software,
+            list_attack_software,
+            search_attack_groups,
+            list_attack_groups,
+            attack_software_used_by_group,
+            attack_techniques_used_by_group,
+            attack_groups_using_software,
+            list_atlas_records,
             search_atlas,
+            list_atlas_tactics,
+            search_atlas_tactics,
+            list_atlas_techniques,
+            search_atlas_techniques,
+            list_atlas_case_studies,
+            search_atlas_case_studies,
+            list_atlas_mitigations,
+            search_atlas_mitigations,
+            search_atlas_software,
+            lookup_atlas_record,
             map_owasp_top10,
             threat_model_frameworks,
             get_threat_model_reference,
