@@ -55,6 +55,7 @@ examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastA
 examples/cybersecurity/27_strands_detection_engineering.py # Strands structured output: telemetry -> Sigma-style detections + hunts
 examples/cybersecurity/28_strands_iam_policy_risk_review.py # Strands structured output: IAM policy risk + least-privilege review
 examples/cybersecurity/29_strands_threat_intel_risk_chat.py # Strands CLI/WebUI chat: threat intel, paginated ATT&CK/ATLAS tools, cached PDF framework refs, FAIR ALE/ROSI risk analysis
+examples/agents/30_strands_remote_mcp_teaching_agent.py # Strands MCP + optional FastAPI/SSE WebUI: tech teaching agent over AWS, Cloudflare, Microsoft, and Google docs MCP servers
 examples/agents/sessions/      # Created by 09/16 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
@@ -112,7 +113,7 @@ aws sso login --profile <profile-name>
 | `openai` | OpenAI Responses/Chat Completions API via bedrock-mantle |
 | `aws-bedrock-token-generator` | Mints bearer tokens from AWS credentials for bedrock-mantle |
 | `strands-agents` | Strands agent framework — files 06–12, 14–20, 23, 26–29 |
-| `strands-agents-tools[rss]` | Strands community tools (rss, current_time, handoff_to_user) — files 07, 09, 11, 12 |
+| `strands-agents-tools[rss]` | Strands community tools (rss, current_time, handoff_to_user) — files 07, 09, 11, 12, 30 |
 | `prompt-toolkit` | Optional — provides readline-style input for file 11 |
 | `fastapi`, `uvicorn` | WebUI server for files 12, 13, 26, 29 |
 | `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py`; direct Unstructured demos in files 24–25; cached PDF references in file 29 |
@@ -123,9 +124,22 @@ aws sso login --profile <profile-name>
 ### Bedrock Runtime model overrides
 Richer Bedrock Runtime Strands examples should generally allow
 `BEDROCK_MODEL_ID` to override the default `MODEL_ID`. This applies to files
-`06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and `26`-`29`. Keep tiny
+`06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and `26`-`30`. Keep tiny
 hello-world examples, Mantle path-specific examples, and Nova Sonic fixed unless
 there is a specific reason to generalize them.
+
+### Remote documentation MCP teaching agent (file 30)
+File 30 connects to three unauthenticated Streamable HTTP docs MCP endpoints by default:
+AWS Knowledge MCP (`https://knowledge-mcp.global.api.aws`), Cloudflare Docs MCP
+(`https://docs.mcp.cloudflare.com/mcp`), and Microsoft Learn MCP
+(`https://learn.microsoft.com/api/mcp`). It also supports Google Developer
+Knowledge MCP (`https://developerknowledge.googleapis.com/mcp`) when
+`GCP_DK_MCP_API_KEY` is set, passing that value as the `X-Goog-Api-Key` header.
+Preserve these defaults unless a provider changes its published endpoint. Keep
+the endpoint overrides as environment variables and CLI flags so the example
+remains easy to test when a single provider is unavailable. File 30's `--web`
+mode should keep using FastAPI/SSE and the shared `webui_markdown.py` renderer
+instead of forking Markdown rendering in the HTML.
 
 ### Strands @tool decorator (file 08)
 The decorator reads the function's type annotations and docstring to build the Bedrock tool spec automatically. The docstring must have an `Args:` section for each parameter and a `Returns:` section.

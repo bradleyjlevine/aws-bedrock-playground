@@ -8,9 +8,9 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 |---------|----------|------------------|
 | Bedrock Runtime vs Bedrock Mantle | `01`, `03`-`05`, `13`, `21`, `22` | Runtime uses native Bedrock APIs such as Converse / InvokeModel. Mantle exposes OpenAI-compatible and Anthropic-compatible SDK paths with Bedrock bearer tokens. |
 | OpenAI-compatible Bedrock calls | `04`, `05`, `13`, `22` | OSS models use Mantle `/v1`; GPT-5.5 / GPT-5.4 use Mantle `/openai/v1` and the Responses API. |
-| Strands agents | `06`-`12`, `14`-`23`, `26`-`29` | Single agents, multi-agent orchestration, graph workflows, swarms, memory, structured output, and custom model adapters. |
-| Tools | `08`, `11`, `12`, `16`, `17`, `23`, `26`-`29` | Native Strands tools, `@tool` decorators, community tools such as `current_time` / `rss`, durable local-memory tools, and externally hosted tools. |
-| MCP (Model Context Protocol) | `17`, `23`, `26` | Local stdio MCP tools, remote MCP tools, Exa MCP web search, and Elastic Agent Builder MCP tools for searching WAF logs. |
+| Strands agents | `06`-`12`, `14`-`23`, `26`-`30` | Single agents, multi-agent orchestration, graph workflows, swarms, memory, structured output, and custom model adapters. |
+| Tools | `08`, `11`, `12`, `16`, `17`, `23`, `26`-`30` | Native Strands tools, `@tool` decorators, community tools such as `current_time` / `rss`, durable local-memory tools, and externally hosted tools. |
+| MCP (Model Context Protocol) | `17`, `23`, `26`, `30` | Local stdio MCP tools, remote MCP tools, Exa MCP web search, Elastic Agent Builder MCP tools for searching WAF logs, and remote documentation MCP servers for teaching platform tasks. |
 | HITL (Human in the Loop) | `11`, `12` | CLI approval with `handoff_to_user` and browser approval with Strands interrupts before a sensitive `send_email` tool runs. |
 | Streaming UI / SSE | `12`, `13`, `26`, `29` | Browser apps that stream tokens and status updates with FastAPI and Server-Sent Events, with shared Markdown rendering for model output. |
 | Document extraction / RAG prep | `13`-`15`, `24`, `25`, `26`, `29` | Unstructured PDF extraction, element-level JSONL, source-attributed prompt chunks, and PDF/URL threat-report context. |
@@ -51,6 +51,7 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 | `examples/cybersecurity/27_strands_detection_engineering.py` | GPT OSS 120B | Strands structured output · `bedrock-runtime` | Turns JSONL/CSV security telemetry into findings, Sigma-style detections, ECS-aware Elastic hunts, and response actions using official SigmaHQ examples as references |
 | `examples/cybersecurity/28_strands_iam_policy_risk_review.py` | GPT OSS 120B | Strands structured output · `bedrock-runtime` | Reviews IAM policy JSON for wildcard permissions, privilege-escalation paths, and least-privilege fixes |
 | `examples/cybersecurity/29_strands_threat_intel_risk_chat.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Interactive CLI or FastAPI/SSE WebUI threat-intel and risk chat with CVE/EUVD, CWE/CAPEC, paginated MITRE ATT&CK Enterprise and MITRE ATLAS tools, OWASP Top 10 2025/2021, cached Security Cards/Unified Kill Chain PDF references, FAIR Monte Carlo ALE, and ROSI tools |
+| `examples/agents/30_strands_remote_mcp_teaching_agent.py` | Claude Haiku 4.5 | Strands MCP · `bedrock-runtime` + remote docs MCP | CLI or FastAPI/SSE tech teaching agent that uses AWS Knowledge, Cloudflare Docs, Microsoft Learn, and optional Google Developer Knowledge MCP servers to teach how to do tasks across platforms |
 
 ## Cybersecurity examples matrix
 
@@ -200,6 +201,7 @@ The mantle endpoint uses two different base paths depending on the model:
 - `examples/cybersecurity/27_strands_detection_engineering.py` demonstrates a structured detection-engineering workflow. The agent uses local tools to summarize event samples, fetch official SigmaHQ examples as style references, validate Sigma-style rule sections, fetch current Elastic ECS fields, and validate Elastic KQL/ES|QL fields before returning a typed detection pack with findings, detection logic, hunts, response actions, assumptions, and a validation plan. It includes a built-in sample and also accepts JSONL or CSV event files.
 - `examples/cybersecurity/28_strands_iam_policy_risk_review.py` demonstrates structured IAM least-privilege review. The agent uses local policy-analysis tools to identify wildcard actions/resources and sensitive permissions such as `iam:PassRole`, then returns a typed risk review with practical fixes and candidate condition keys.
 - `examples/cybersecurity/29_strands_threat_intel_risk_chat.py` runs an interactive threat-intel chat agent in CLI mode or with `--web` as a FastAPI/SSE browser chat on `http://127.0.0.1:8003`. It can enrich CVE/EUVD records through Shodan CVEDB, pull bounded CWE/CAPEC definition excerpts from MITRE pages, query MITRE ATT&CK Enterprise tactics/techniques/software/groups with paginated list/search tools and group/software relationship tools, query MITRE ATLAS tactics/techniques/case studies/mitigations/software with paginated list/search tools and exact record lookup, map scenarios to OWASP Top 10:2025 or 2021, generate STRIDE/PASTA/Lockheed Kill Chain/Unified Kill Chain/Security Cards prompts, extract the official Security Cards and Unified Kill Chain PDFs to cached markdown under `downloads/threat_model_refs/`, run FAIR-style Monte Carlo ALE simulations, and calculate ROSI to help justify security tool or control cost.
+- `examples/agents/30_strands_remote_mcp_teaching_agent.py` runs a documentation-grounded teaching agent for learning how to do tasks across AWS, Cloudflare, Microsoft, and Google Cloud platforms. It connects to AWS Knowledge MCP (`https://knowledge-mcp.global.api.aws`), Cloudflare Docs MCP (`https://docs.mcp.cloudflare.com/mcp`), and Microsoft Learn MCP (`https://learn.microsoft.com/api/mcp`) by default, then automatically adds Google Developer Knowledge MCP (`https://developerknowledge.googleapis.com/mcp`) when `GCP_DK_MCP_API_KEY` is set. The agent uses the relevant documentation tools before giving platform-specific steps, tradeoffs, common mistakes, verification checks, and a short knowledge check. Use `--interactive` to keep the same CLI session open for follow-up questions, `--web` to run the browser chat UI on `http://127.0.0.1:8004`, `--source` to focus on one or more providers, and `--allow-partial` when one remote docs MCP server is unavailable.
 
 ## WebUI Markdown rendering
 
@@ -236,6 +238,10 @@ uv run python examples/cybersecurity/28_strands_iam_policy_risk_review.py --poli
 uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py
 uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --prompt "Tell me about CVE-2023-34362 and map it to CWE, ATT&CK, OWASP, STRIDE, and FAIR."
 uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --web
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --interactive
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --web
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --prompt "Teach me how to deploy a static site on Cloudflare, AWS, and Microsoft."
 ```
 
 For richer Bedrock Runtime Strands examples, override the default model with
@@ -247,7 +253,7 @@ BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
 ```
 
 This applies to files `06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and
-`26`-`29`. The smallest hello-world examples, Mantle path-specific examples,
+`26`-`30`. The smallest hello-world examples, Mantle path-specific examples,
 and Nova Sonic voice example keep fixed model IDs because their purpose or
 transport is model-specific.
 
@@ -266,6 +272,7 @@ uv run python examples/agents/12_strands_webui_sse_hitl.py        # http://local
 uv run python examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py     # http://localhost:8001
 uv run python examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py    # http://localhost:8002
 uv run python examples/cybersecurity/29_strands_threat_intel_risk_chat.py --web  # http://localhost:8003
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --web  # http://127.0.0.1:8004
 ```
 
 Elastic Agent Builder MCP setup for file `26`:
@@ -286,6 +293,17 @@ MCP example:
 uv run python examples/agents/17_strands_mcp_repo_tools_agent.py
 REMOTE_MCP_URL=http://localhost:8000/mcp uv run python examples/agents/17_strands_mcp_repo_tools_agent.py
 REMOTE_MCP_URL=http://localhost:8000/sse REMOTE_MCP_TRANSPORT=sse uv run python examples/agents/17_strands_mcp_repo_tools_agent.py
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --prompt "Teach me how to put an API behind auth on AWS, Cloudflare, and Microsoft."
+```
+
+Google Developer Knowledge MCP setup for file `30`:
+
+```bash
+# Follow Google's setup to enable the Developer Knowledge API and create a restricted API key:
+# https://developers.google.com/knowledge/mcp#gcloud-cli
+export GCP_DK_MCP_API_KEY=...
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --source gcp --prompt "Teach me how to deploy a Cloud Run service."
+uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --web
 ```
 
 Sandbox example:
