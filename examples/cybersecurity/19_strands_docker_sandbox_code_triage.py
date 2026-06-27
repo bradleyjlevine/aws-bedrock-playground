@@ -7,6 +7,7 @@ Strands DockerSandbox attaches to an already-running container. Start one first:
 
 Then run:
   uv run python examples/cybersecurity/19_strands_docker_sandbox_code_triage.py
+  uv run python examples/cybersecurity/19_strands_docker_sandbox_code_triage.py --file ./suspicious.py
 
 Set STRANDS_SANDBOX_CONTAINER to use a different running container name.
 """
@@ -21,6 +22,7 @@ if str(ROOT) not in sys.path:
 from logging_utils import configure_script_logging
 
 LOGGER = configure_script_logging(__file__)
+import argparse
 import asyncio
 import os
 import subprocess
@@ -108,6 +110,13 @@ def make_agent() -> Agent:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--file",
+        help="Path to a local Python source file to statically inspect in the sandbox.",
+    )
+    args = parser.parse_args()
+
     if not _container_running():
         print(
             f"Container {CONTAINER!r} is not running.\n"
@@ -117,18 +126,31 @@ def main() -> None:
         )
         return
 
-    sample = textwrap.dedent(
-        """
-        import base64
-        import os
-        import subprocess
+    if args.file:
+        source_path = Path(args.file)
+        source = source_path.read_text(encoding="utf-8", errors="replace")
+        label = str(source_path)
+    else:
+        source = textwrap.dedent(
+            """
+            import base64
+            import os
+            import subprocess
 
-        payload = base64.b64decode("cHJpbnQoJ2hlbGxvJyk=")
-        subprocess.run(["python", "-c", payload.decode()])
-        os.remove("/tmp/audit.log")
-        """
-    ).strip()
-    print(make_agent()(f"Assess this Python snippet for security risk:\n\n```python\n{sample}\n```"))
+            payload = base64.b64decode("cHJpbnQoJ2hlbGxvJyk=")
+            subprocess.run(["python", "-c", payload.decode()])
+            os.remove("/tmp/audit.log")
+            """
+        ).strip()
+        label = "built-in sample"
+
+    print(
+        make_agent()(
+            f"Assess this Python snippet for security risk ({label}). "
+            "Use static compile and inventory only.\n\n"
+            f"```python\n{source}\n```"
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 Hello World: Strands + Elastic Agent Builder MCP WAF WebUI
 FastAPI + SSE browser chat for WAF / web-attack questions. The Strands agent
 uses AWS Bedrock for reasoning and Elastic Agent Builder's MCP server for WAF
-log search and analysis.
+log search, attack-pattern discovery, and attack timeline reconstruction.
 
 Elastic setup:
   1. Create Agent Builder tools in Kibana for your WAF logs, or expose the
@@ -42,13 +42,10 @@ import os
 import time
 from contextlib import asynccontextmanager
 from contextlib import ExitStack
-from urllib.parse import urlparse
+from typing import Any
 
 import boto3
-import markdownify
-import requests as _requests
 import uvicorn
-from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
@@ -56,6 +53,7 @@ from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 
+from cyber_source_utils import fetch_url_markdown
 from pdf_utils import extract_pdf_text_from_bytes
 from webui_markdown import MARKDOWN_RENDERER_JS
 
@@ -66,6 +64,8 @@ MODEL_ID = os.environ.get(
 )
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_SOURCE_CHARS = 120_000
+MAX_HISTORY_TURNS = 6
+MAX_HISTORY_CHARS = 12_000
 WAF_DATA_CONTEXT = os.environ.get(
     "ELASTIC_WAF_DATA_CONTEXT",
     (
@@ -76,23 +76,18 @@ WAF_DATA_CONTEXT = os.environ.get(
         "logs-aws.waf*, logs-aws_waf*, filebeat-*, or indices whose mappings "
         "include fields like aws.waf.*, cloud.account.id, source.ip, "
         "http.request.*, url.path, user_agent.original, rule.id, rule.name, "
-        "action, terminatingRuleId, labels, or webacl. If the user's question "
-        "requires context beyond WAF events, discover and use the relevant "
-        "related datasets as supporting evidence."
+        "aws.waf.labels.name, labels, event.action, event.outcome, action, "
+        "terminatingRuleId, or webacl. For attack type classification, first check "
+        "aws.waf.labels.name because AWS WAF labels usually carry the clearest "
+        "managed-rule attack category or signature context; fall back to rule.id "
+        "and rule.name when labels are missing, sparse, or too generic. For "
+        "allowed/blocked disposition, first check ECS fields event.action and "
+        "event.outcome, then confirm or enrich with WAF-specific fields such as "
+        "action or terminatingRuleId when those fields exist. If the user's "
+        "question requires context beyond WAF events, discover and use the "
+        "relevant related datasets as supporting evidence."
     ),
 )
-
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/126.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-}
 
 SYSTEM_PROMPT = """
 You are a senior web-application security analyst investigating WAF and web
@@ -108,7 +103,7 @@ log questions. Useful tool families may include:
   AWS WAF index/data stream and field names.
 - platform.core.execute_esql for precise aggregations such as top attackers,
   top paths, top terminating rules, top labels, action counts, country counts,
-  and time-series spikes.
+  time-series spikes, repeated attack-pattern clusters, and timeline buckets.
 - platform.core.search for exploratory natural-language search over AWS WAF
   logs when the user asks a broad question.
 - platform.core.integration_knowledge and platform.core.product_documentation
@@ -125,8 +120,49 @@ Work in this order:
 4. Use platform.core.generate_esql or platform.core.execute_esql for the actual
    WAF log analysis. Give generate_esql the discovered index and relevant field
    context; do not rely on it to infer everything from scratch.
-5. Summarize what indices, fields, and time range you searched, then explain the
+5. For attack-pattern or timeline questions, run grouped/time-bucketed analysis
+   that can reveal repeated source IPs/networks, countries, user agents, URI
+   paths, HTTP methods, payload keywords, WAF labels, terminating rules, actions,
+   response statuses, and spike windows. Prefer ES|QL STATS by time bucket and
+   by attacker/path/rule dimensions when the mapped fields support it.
+6. Summarize what indices, fields, and time range you searched, then explain the
    high-level evidence and what it means.
+
+For attack type classification, check `aws.waf.labels.name` first and group by
+that field when it is present. Use it as the primary source for categories such
+as SQL injection, XSS, command injection, scanner/probe, known bad input, bot,
+or managed-rule signature families. If `aws.waf.labels.name` is absent,
+unmapped, or too generic, fall back to `rule.id` and then `rule.name` for the
+best available attack-type signal. If you fall back, say so explicitly.
+
+For allow/block status, treat ECS `event.action` and `event.outcome` as the
+general normalized fields to check first. Use them for allowed vs blocked counts
+when mappings show they are populated. If WAF-specific fields are present, such
+as `action`, `terminatingRuleId`, `aws.waf.action`, or `aws.waf.terminating_rule_id`,
+use them to confirm the ECS interpretation and add rule-level detail. If these
+fields disagree or one family is missing, say exactly which fields were available
+and which one drove the conclusion.
+
+When the user asks broad questions such as "what attacks are happening",
+"find patterns", "build a timeline", "what happened", "are we being probed",
+or "is this a campaign", proactively look for:
+- Attack patterns: repeated indicators or behavior clusters across source IP,
+  ASN/network if available, country, user agent, URI/path, method, query/payload
+  fragments, `aws.waf.labels.name`, `rule.id`, terminating rule, ECS event
+  action/outcome, WAF action, and target host/application.
+- Timeline: first seen, last seen, volume by time bucket, notable spikes, changes
+  in targets or techniques, and whether events appear to progress from scanning
+  to exploit attempts to blocked/allowed requests.
+- Evidence quality: exact fields used, row counts or aggregate counts, time
+  range searched, and missing fields that limit attribution.
+
+For attack-pattern or timeline answers, use these sections when they fit:
+## Scope Checked
+## Attack Patterns
+## Attack Timeline
+## Notable Attackers or Targets
+## Evidence Gaps
+## Defensive Actions
 
 For requests involving a threat report PDF or web page, compare the report's
 indicators, paths, payload patterns, CVEs, user agents, source networks, and
@@ -182,6 +218,44 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+def _parse_history(raw_history: str) -> list[dict[str, str]]:
+    if not raw_history.strip():
+        return []
+    try:
+        records = json.loads(raw_history)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(records, list):
+        return []
+
+    history: list[dict[str, str]] = []
+    total_chars = 0
+    for record in records[-MAX_HISTORY_TURNS * 2:]:
+        if not isinstance(record, dict):
+            continue
+        role = str(record.get("role", "")).strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(record.get("content", "")).strip()
+        if not content:
+            continue
+        remaining = MAX_HISTORY_CHARS - total_chars
+        if remaining <= 0:
+            break
+        content = content[:remaining]
+        total_chars += len(content)
+        history.append({"role": role, "content": content})
+    return history
+
+
+def _format_history(history: list[dict[str, str]]) -> str:
+    sections = []
+    for item in history:
+        label = "User" if item["role"] == "user" else "Assistant"
+        sections.append(f"{label}:\n{item['content']}")
+    return "\n\n---\n\n".join(sections)
+
+
 def _tool_use_name_from_stream_event(event: dict) -> str:
     """Return the tool name from known Strands stream event shapes."""
     raw = event.get("event", {}) if isinstance(event, dict) else {}
@@ -205,19 +279,6 @@ def _tool_use_name_from_stream_event(event: dict) -> str:
         if isinstance(value, str) and value.startswith("platform."):
             return value
     return ""
-
-
-def _url_fetch_headers(url: str) -> dict[str, str]:
-    parsed = urlparse(url)
-    origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else url
-    return {**BROWSER_HEADERS, "Referer": origin}
-
-
-def _html_to_markdown(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "svg"]):
-        tag.decompose()
-    return markdownify.markdownify(str(soup), heading_style="ATX").strip()
 
 
 def _elastic_mcp_url() -> str:
@@ -307,13 +368,7 @@ async def _load_source_blocks(files: list[UploadFile], urls: list[str], source_b
         yield _sse({"type": "stage", "stage": "sources", "text": f"Fetching report URL {index}: {source_url}"})
 
         def fetch_markdown() -> str:
-            response = _requests.get(
-                source_url,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-                headers=_url_fetch_headers(source_url),
-            )
-            response.raise_for_status()
-            return _html_to_markdown(response.text)
+            return fetch_url_markdown(source_url, timeout=REQUEST_TIMEOUT_SECONDS)
 
         md_text = await asyncio.to_thread(fetch_markdown)
         if not md_text:
@@ -324,17 +379,23 @@ async def _load_source_blocks(files: list[UploadFile], urls: list[str], source_b
         )
 
 
-async def _stream_waf_analysis(question: str, files: list[UploadFile], urls: list[str]):
+async def _stream_waf_analysis(
+    question: str,
+    files: list[UploadFile],
+    urls: list[str],
+    history: list[dict[str, str]],
+):
     if not question.strip():
         yield _sse({"type": "error", "text": "Ask a WAF or web-attack question first."})
         return
 
     try:
         LOGGER.debug(
-            "Starting WAF analysis question_chars=%d pdf_sources=%d url_sources=%d",
+            "Starting WAF analysis question_chars=%d pdf_sources=%d url_sources=%d history_turns=%d",
             len(question),
             len(files),
             len(urls),
+            len(history),
         )
         yield _sse({"type": "stage", "stage": "sources", "text": "Preparing optional threat-report sources."})
         source_blocks = []
@@ -359,9 +420,28 @@ async def _stream_waf_analysis(question: str, files: list[UploadFile], urls: lis
                 "Prefer AWS WAF logs for direct WAF questions, but include other "
                 "datasets when they are needed to answer the question accurately. "
                 "If multiple candidate indices exist, inspect mappings before choosing. "
-                "Prefer ES|QL for grouped counts and top-N analysis after discovery."
+                "Prefer ES|QL for grouped counts, top-N analysis, time buckets, and "
+                "attack timeline reconstruction after discovery. For broad attack "
+                "questions, look for repeated attacker/path/rule/user-agent/label "
+                "clusters and explain whether the evidence suggests scanning, exploit "
+                "attempts, credential abuse, bot activity, or another pattern. For "
+                "allowed vs blocked disposition, check ECS event.action and "
+                "event.outcome first, then use WAF-specific action or terminating "
+                "rule fields for confirmation and detail when mappings show them. "
+                "For attack type, check aws.waf.labels.name first and fall back to "
+                "rule.id or rule.name when labels are missing or not useful."
             ),
         ]
+        if history:
+            prompt_parts.append(
+                "Recent conversation context from this browser session:\n"
+                f"{_format_history(history)}\n\n"
+                "Use this history only to resolve follow-up references such as "
+                "'those IPs', 'that spike', 'the second pattern', or 'same time range'. "
+                "The current user request is authoritative. Re-query Elastic logs for "
+                "claims that need current evidence; do not treat prior assistant text "
+                "as fresh evidence by itself."
+            )
         if source_blocks:
             prompt_parts.append(
                 "Threat-report source material supplied by the user:\n\n"
@@ -419,8 +499,6 @@ async def _stream_waf_analysis(question: str, files: list[UploadFile], urls: lis
 
         yield _sse({"type": "done"})
         LOGGER.debug("Completed WAF analysis turn")
-    except _requests.HTTPError as exc:
-        yield _sse({"type": "error", "text": f"Could not fetch report URL: {exc}"})
     except Exception as exc:
         LOGGER.exception("WAF analysis failed")
         yield _sse({"type": "error", "text": str(exc)})
@@ -437,17 +515,20 @@ async def ask(
     question: str = Form(default=""),
     files: list[UploadFile] | None = File(default=None),
     urls: str = Form(default=""),
+    history: str = Form(default=""),
 ) -> StreamingResponse:
     named_files = [file for file in (files or []) if file.filename]
     url_list = [line.strip() for line in urls.splitlines() if line.strip()]
+    history_records = _parse_history(history)
     LOGGER.debug(
-        "Received /ask request question_chars=%d pdf_sources=%d url_sources=%d",
+        "Received /ask request question_chars=%d pdf_sources=%d url_sources=%d history_turns=%d",
         len(question),
         len(named_files),
         len(url_list),
+        len(history_records),
     )
     return StreamingResponse(
-        _stream_waf_analysis(question, named_files, url_list),
+        _stream_waf_analysis(question, named_files, url_list, history_records),
         media_type="text/event-stream",
     )
 
@@ -519,6 +600,7 @@ HTML_PAGE = """\
     #answer.hide-activity .bubble.tool,
     #answer.hide-activity .bubble.meta { display: none; }
     .bubble { border: 1px solid #e0e5ee; border-radius: 8px; padding: 0.75rem 0.85rem; background: #fff; overflow-x: auto; }
+    .bubble.user { background: #eef6ff; border-left: 4px solid #4d95d9; }
     .bubble.assistant { border-left: 4px solid #0077cc; }
     .bubble.tool { background: #f7f9fc; color: #405064; border-left: 4px solid #7b8794; font-size: 0.88rem; }
     .bubble.meta { background: #f2f7f3; color: #244b2f; border-left: 4px solid #28a745; font-size: 0.88rem; }
@@ -572,10 +654,13 @@ HTML_PAGE = """\
     <section class="panel">
       <div class="field">
         <label for="question">Question</label>
-        <textarea id="question" placeholder="Show me the top attack types in the last 24 hours."></textarea>
+        <textarea id="question" placeholder="Find attack patterns and build a timeline for the last 24 hours."></textarea>
+        <div class="hint">Follow-up questions use the recent conversation from this browser tab. Files and URLs remain attached until you clear them.</div>
         <div class="examples">
-          <button class="chip" type="button">Show me the top attack types?</button>
+          <button class="chip" type="button">Find attack patterns and build a timeline for the last 24 hours.</button>
+          <button class="chip" type="button">Are there signs of a coordinated campaign? Group related attacks and explain the evidence.</button>
           <button class="chip" type="button">Who are the top attackers and what are they doing?</button>
+          <button class="chip" type="button">Show the sequence of scanning, exploit attempts, blocks, and allowed requests if the data supports it.</button>
           <button class="chip" type="button">Based on this threat report, have we had matching attacks?</button>
           <button class="chip" type="button">Suggest WAF rules from this report.</button>
         </div>
@@ -600,7 +685,7 @@ HTML_PAGE = """\
 
     <section>
       <div class="result-head">
-        <div class="result-title">Answer</div>
+        <div class="result-title">Conversation</div>
         <div class="result-tools">
           <label class="activity-toggle" for="show-activity">
             <input id="show-activity" type="checkbox">
@@ -627,6 +712,8 @@ const showActivity = document.getElementById("show-activity");
 const toolSummary = document.getElementById("tool-summary");
 let currentAssistantBubble = null;
 let currentAssistantMarkdown = "";
+let conversationHistory = [];
+const maxHistoryItems = 12;
 
 const stageOrder = [
   ["sources", "Prepare sources"],
@@ -696,6 +783,8 @@ async function streamResponse(resp) {
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let assistantText = "";
+  let failed = false;
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -718,8 +807,10 @@ async function streamResponse(resp) {
         addBubble("tool", "Tool Call", evt.text);
         breakAssistantBubble();
       } else if (evt.type === "token") {
+        assistantText += evt.text;
         appendMarkdown(evt.text);
       } else if (evt.type === "error") {
+        failed = true;
         setStage("done", evt.text, "error");
         addBubble("error", "Error", evt.text);
         breakAssistantBubble();
@@ -728,6 +819,7 @@ async function streamResponse(resp) {
       }
     }
   }
+  return { assistantText, failed };
 }
 
 for (const chip of document.querySelectorAll(".chip")) {
@@ -740,26 +832,30 @@ clear.addEventListener("click", () => {
   question.value = "";
   urls.value = "";
   files.value = "";
+  conversationHistory = [];
   breakAssistantBubble();
   answer.innerHTML = "";
   toolSummary.textContent = "";
   toolSummary.title = "";
+  ask.textContent = "Search WAF Logs";
   resetStages();
 });
 
 ask.addEventListener("click", async () => {
   const text = question.value.trim();
   if (!text) { setStage("sources", "Ask a WAF question first.", "error"); return; }
+  const historyForRequest = conversationHistory.slice(-maxHistoryItems);
   breakAssistantBubble();
-  answer.innerHTML = "";
   toolSummary.textContent = "";
   toolSummary.title = "";
   resetStages();
+  addBubble("user", "You", text);
   ask.disabled = true;
 
   const form = new FormData();
   form.append("question", text);
   form.append("urls", urls.value);
+  form.append("history", JSON.stringify(historyForRequest));
   for (const file of Array.from(files.files || [])) form.append("files", file);
 
   try {
@@ -768,7 +864,16 @@ ask.addEventListener("click", async () => {
       setStage("done", "Server error: " + resp.status, "error");
       return;
     }
-    await streamResponse(resp);
+    const result = await streamResponse(resp);
+    if (!result.failed) {
+      conversationHistory.push({ role: "user", content: text });
+      if (result.assistantText.trim()) {
+        conversationHistory.push({ role: "assistant", content: result.assistantText.trim() });
+      }
+      conversationHistory = conversationHistory.slice(-maxHistoryItems);
+      question.value = "";
+      ask.textContent = "Ask Follow-up";
+    }
   } catch (err) {
     setStage("done", "Browser error: " + err.message, "error");
   } finally {

@@ -53,6 +53,7 @@ from pydantic import BaseModel
 from strands import Agent, tool
 from strands.models import BedrockModel
 
+from cyber_vuln_utils import lookup_cve_record, lookup_euvd_record
 from webui_markdown import MARKDOWN_RENDERER_JS
 
 REGION = "us-east-1"
@@ -61,7 +62,6 @@ MODEL_ID = os.environ.get(
     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 )
 
-CVEDB_BASE_URL = "https://cvedb.shodan.io"
 ATTACK_STIX_URL = (
     "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/"
     "enterprise-attack/enterprise-attack.json"
@@ -75,8 +75,6 @@ SECURITY_CARDS_URL = "https://securitycards.cs.washington.edu/assets/security-ca
 UNIFIED_KILL_CHAIN_URL = "https://www.unifiedkillchain.com/assets/The-Unified-Kill-Chain.pdf"
 REFERENCE_CACHE_DIR = ROOT / "downloads" / "threat_model_refs"
 
-CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
-EUVD_ID_RE = re.compile(r"^EUVD-\d{4}-\d{4,}$", re.IGNORECASE)
 CWE_ID_RE = re.compile(r"^(?:CWE-)?(\d+)$", re.IGNORECASE)
 CAPEC_ID_RE = re.compile(r"^(?:CAPEC-)?(\d+)$", re.IGNORECASE)
 CWE_MENTION_RE = re.compile(r"\bCWE-(\d+)\b", re.IGNORECASE)
@@ -426,47 +424,6 @@ def get_threat_model_reference(reference: str = "both", query: str = "") -> dict
     return {
         "cache_directory": str(REFERENCE_CACHE_DIR),
         "references": results,
-    }
-
-
-def summarize_cve_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "cve_id": record.get("cve_id"),
-        "summary": record.get("summary"),
-        "cvss": record.get("cvss"),
-        "cvss_version": record.get("cvss_version"),
-        "epss": record.get("epss"),
-        "ranking_epss": record.get("ranking_epss"),
-        "kev": record.get("kev"),
-        "ransomware_campaign": record.get("ransomware_campaign"),
-        "published_time": record.get("published_time"),
-        "propose_action": record.get("propose_action"),
-        "references": (record.get("references") or [])[:5],
-        "cpes": (record.get("cpes") or [])[:10],
-    }
-
-
-def summarize_euvd_record(record: dict[str, Any]) -> dict[str, Any]:
-    cve = record.get("cve") or {}
-    return {
-        "euvd_id": record.get("euvd_id"),
-        "description": record.get("description"),
-        "cvss": record.get("cvss"),
-        "cvss_version": record.get("cvss_version"),
-        "epss": record.get("epss"),
-        "published_time": record.get("published_time"),
-        "assigner": record.get("assigner"),
-        "vendors": record.get("vendors") or [],
-        "products": record.get("products") or [],
-        "references": (record.get("references") or [])[:5],
-        "linked_cve": {
-            "cve_id": cve.get("id"),
-            "summary": cve.get("summary"),
-            "cvss": cve.get("cvss"),
-            "epss": cve.get("epss"),
-            "kev": cve.get("kev"),
-            "references": (cve.get("references") or [])[:5],
-        } if cve else None,
     }
 
 
@@ -882,13 +839,7 @@ def lookup_cve(cve_id: str) -> dict[str, Any]:
     Returns:
         Selected CVE details including summary, CVSS, EPSS, KEV status, references, and CPEs.
     """
-    normalized = cve_id.strip().upper()
-    if not CVE_ID_RE.match(normalized):
-        return {"error": f"Invalid CVE ID: {cve_id}"}
-    try:
-        return summarize_cve_record(_http_json(f"{CVEDB_BASE_URL}/cve/{normalized}"))
-    except (OSError, URLError, json.JSONDecodeError) as exc:
-        return {"cve_id": normalized, "error": str(exc)}
+    return lookup_cve_record(cve_id)
 
 
 @tool
@@ -901,13 +852,7 @@ def lookup_euvd(euvd_id: str) -> dict[str, Any]:
     Returns:
         Selected EUVD details including description, CVSS, EPSS, references, affected products, and linked CVE data.
     """
-    normalized = euvd_id.strip().upper()
-    if not EUVD_ID_RE.match(normalized):
-        return {"error": f"Invalid EUVD ID: {euvd_id}"}
-    try:
-        return summarize_euvd_record(_http_json(f"{CVEDB_BASE_URL}/euvd/{normalized}"))
-    except (OSError, URLError, json.JSONDecodeError) as exc:
-        return {"euvd_id": normalized, "error": str(exc)}
+    return lookup_euvd_record(euvd_id)
 
 
 @tool

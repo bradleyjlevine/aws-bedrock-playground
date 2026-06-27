@@ -9,7 +9,7 @@ PDF handling:
   limit that rejects large base64 payloads.
 
 Webpage handling:
-  The URL is fetched with requests and converted to clean markdown with markdownify,
+  The URL is fetched through shared SSRF-safe helpers, converted to clean markdown,
   then sent as text.
 
 Architecture:
@@ -37,17 +37,14 @@ LOGGER = configure_script_logging(__file__)
 import asyncio
 import json
 import time
-from urllib.parse import urlparse
 
-import markdownify
-import requests as _requests
 import uvicorn
-from bs4 import BeautifulSoup
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from openai import AsyncBedrockOpenAI
 
 from auth import get_mantle_token
+from cyber_source_utils import fetch_url_markdown
 from pdf_utils import extract_pdf_text_from_bytes
 from webui_markdown import MARKDOWN_RENDERER_JS
 
@@ -56,31 +53,6 @@ PRIMARY_MODEL = "openai.gpt-5.5"
 FALLBACK_MODEL = "openai.gpt-5.4"
 REQUEST_TIMEOUT_SECONDS = 45.0
 MANTLE_DEFAULT_HEADERS = {"OpenAI-Project": "default"}
-BROWSER_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/126.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-    "Upgrade-Insecure-Requests": "1",
-}
-
-
-def _url_fetch_headers(url: str) -> dict[str, str]:
-    parsed = urlparse(url)
-    origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else url
-    return {**BROWSER_HEADERS, "Referer": origin}
-
-
-def _html_to_markdown(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style", "noscript", "svg"]):
-        tag.decompose()
-    return markdownify.markdownify(str(soup), heading_style="ATX").strip()
 
 
 def is_gpt55_outage(exc: BaseException) -> bool:
@@ -276,26 +248,18 @@ async def _stream_request_analysis(files: list[UploadFile], url: str):
         yield _sse({"type": "status", "text": f"Fetching URL {index}/{len(urls)}: {source_url}"})
 
         def fetch_markdown() -> str:
-            resp = _requests.get(source_url, timeout=25, headers=_url_fetch_headers(source_url))
-            resp.raise_for_status()
-            return _html_to_markdown(resp.text)
+            return fetch_url_markdown(source_url, timeout=25)
 
         try:
             md_text = await asyncio.to_thread(fetch_markdown)
             md_text = md_text[:100_000]
-        except _requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 403:
-                message = (
-                    "Could not fetch URL: the site returned HTTP 403 Forbidden. "
-                    "It is likely blocking automated fetches. Open the page in a "
-                    "browser, save it as PDF, then upload that file instead."
-                )
-            else:
-                message = f"Could not fetch URL: {exc}"
+        except ValueError as exc:
+            message = f"Could not fetch URL: {exc}"
             yield _sse({"type": "error", "text": message})
             return
         except Exception as exc:
-            yield _sse({"type": "error", "text": f"Could not fetch URL: {exc}"})
+            message = f"Could not fetch URL: {exc}"
+            yield _sse({"type": "error", "text": message})
             return
 
         source_count += 1
