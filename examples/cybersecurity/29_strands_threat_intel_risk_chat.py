@@ -2298,8 +2298,11 @@ def main() -> None:
     agent = make_agent()
 
     if args.prompt:
-        agent(args.prompt)
-        print()
+        try:
+            agent(args.prompt)
+            print()
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
         return
 
     print("Threat Intel Risk Chat. Type 'quit' or Ctrl-C to exit.")
@@ -2309,14 +2312,18 @@ def main() -> None:
         try:
             user_input = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nbye")
+            print("\nGoodbye!")
             break
         if user_input.lower() in {"quit", "exit"}:
-            print("bye")
+            print("Goodbye!")
             break
         if not user_input:
             continue
-        agent(user_input)
+        try:
+            agent(user_input)
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
         print("\n")
 
 

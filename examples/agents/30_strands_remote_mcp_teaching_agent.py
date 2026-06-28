@@ -25,14 +25,23 @@ if str(ROOT) not in sys.path:
 from logging_utils import configure_script_logging
 from webui_markdown import MARKDOWN_RENDERER_JS
 
-LOGGER = configure_script_logging(__file__)
 import argparse
+import asyncio
 import json
+import logging
 import os
 import time
-from contextlib import asynccontextmanager
 from contextlib import ExitStack
 from typing import Any
+
+LOGGER = configure_script_logging(__file__)
+for noisy_logger in (
+    "botocore.parsers",
+    "botocore.endpoint",
+    "httpcore",
+    "mcp.client.streamable_http",
+):
+    logging.getLogger(noisy_logger).setLevel(logging.INFO)
 
 import boto3
 import uvicorn
@@ -41,21 +50,40 @@ from fastapi import FastAPI
 from fastapi import Request as FastAPIRequest
 from fastapi.responses import HTMLResponse, StreamingResponse
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
-from pydantic import BaseModel
+from mcp.types import Tool as MCPTool
+from pydantic import BaseModel, Field
 from strands import Agent, tool
 from strands.models import BedrockModel
+from strands.types._events import ToolResultEvent
+from strands.types.tools import AgentTool, ToolGenerator, ToolSpec, ToolUse
 from strands.tools.mcp import MCPClient
+from strands.vended_plugins.context_offloader import ContextOffloader, InMemoryStorage
 from strands_tools import current_time
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID",
     "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 )
-DEFAULT_MAX_TOKENS = 4_096
+DEFAULT_MAX_TOKENS = env_int("BEDROCK_MAX_TOKENS", 8_192)
 DEFAULT_BEDROCK_READ_TIMEOUT = 300
 DEFAULT_BEDROCK_CONNECT_TIMEOUT = 10
 DEFAULT_MCP_STARTUP_TIMEOUT = 30
+DEFAULT_OFFLOAD_MAX_RESULT_TOKENS = 1_500
+DEFAULT_OFFLOAD_PREVIEW_TOKENS = 500
+MAX_WEB_HISTORY_MESSAGES = 12
+MAX_WEB_HISTORY_CHARS = 8_000
 DEFAULT_PROMPT = (
     "Teach me how to design a small serverless API and explain how I would do "
     "it on AWS, Cloudflare, and Microsoft platforms. Include a practical path, "
@@ -79,7 +107,7 @@ SOURCE_ENDPOINTS = {
         "url": "https://learn.microsoft.com/api/mcp",
     },
     "gcp": {
-        "label": "Google Developer Knowledge MCP",
+        "label": "Google Developer Knowledge",
         "env": "GCP_DK_MCP_URL",
         "url": "https://developerknowledge.googleapis.com/mcp",
         "api_key_env": "GCP_DK_MCP_API_KEY",
@@ -138,10 +166,113 @@ def make_remote_mcp_client(source: str, url: str, startup_timeout: int) -> MCPCl
                 http_client=create_mcp_http_client(headers=source_headers(source)),
             ),
             startup_timeout=startup_timeout,
+            prefix=source,
         )
     return MCPClient(
         lambda: streamable_http_client(url),
         startup_timeout=startup_timeout,
+    )
+
+
+class FreshMCPAgentTool(AgentTool):
+    """MCP tool wrapper that opens a fresh remote session for each invocation."""
+
+    def __init__(
+        self,
+        source: str,
+        url: str,
+        startup_timeout: int,
+        mcp_tool: MCPTool,
+        tool_name: str,
+    ) -> None:
+        super().__init__()
+        self.source = source
+        self.url = url
+        self.startup_timeout = startup_timeout
+        self.mcp_tool = mcp_tool
+        self._tool_name = tool_name
+
+    @property
+    def tool_name(self) -> str:
+        return self._tool_name
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        spec: ToolSpec = {
+            "inputSchema": {"json": self.mcp_tool.inputSchema},
+            "name": self.tool_name,
+            "description": self.mcp_tool.description
+            or f"Tool which performs {self.mcp_tool.name}",
+        }
+        if self.mcp_tool.outputSchema:
+            spec["outputSchema"] = {"json": self.mcp_tool.outputSchema}
+        return spec
+
+    @property
+    def tool_type(self) -> str:
+        return "python"
+
+    async def _call_once(self, tool_use: ToolUse):
+        client = make_remote_mcp_client(self.source, self.url, self.startup_timeout)
+        entered = False
+        result = None
+        try:
+            client.__enter__()
+            entered = True
+            result = await client.call_tool_async(
+                tool_use_id=tool_use["toolUseId"],
+                name=self.mcp_tool.name,
+                arguments=tool_use["input"],
+            )
+        finally:
+            if entered:
+                try:
+                    client.__exit__(None, None, None)
+                except RuntimeError:
+                    if result is None:
+                        raise
+                    LOGGER.debug(
+                        "Ignoring %s MCP session close after successful %s call",
+                        self.source,
+                        self.tool_name,
+                    )
+
+        return result
+
+    async def stream(
+        self,
+        tool_use: ToolUse,
+        invocation_state: dict[str, Any],
+        **kwargs: Any,
+    ) -> ToolGenerator:
+        result = None
+        for attempt in range(2):
+            result = await self._call_once(tool_use)
+            if not is_mcp_session_closed_tool_result(result):
+                break
+            if attempt == 0:
+                LOGGER.warning(
+                    "Retrying %s after Google MCP session closed during tool call",
+                    self.tool_name,
+                )
+
+        if result is not None:
+            yield ToolResultEvent(result)
+
+
+def is_mcp_session_closed_tool_result(result: Any) -> bool:
+    if not isinstance(result, dict) or result.get("status") != "error":
+        return False
+
+    text_parts = []
+    for item in result.get("content", []):
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            text_parts.append(item["text"].lower())
+
+    text = "\n".join(text_parts)
+    return (
+        "connection to the mcp server was closed" in text
+        or "client session is not running" in text
     )
 
 
@@ -176,14 +307,36 @@ def build_system_prompt(active_sources: list[str]) -> str:
         "When a task spans multiple platforms, compare AWS, Cloudflare, Microsoft, and "
         "Google Cloud only where the connected docs support it, and say when a source is "
         "unavailable or does not cover the requested detail. "
+        "Use gcp_search_documents, gcp_answer_query, and gcp_get_documents for "
+        "Google Cloud and other Google developer documentation. "
+        "Do not claim the Google Developer Knowledge key is expired, invalid, or misconfigured unless "
+        "a Google tool result explicitly reports an authentication failure; a generic "
+        "tool error only means the Google documentation source was not verified in this run. "
+        "Do not use AWS, Cloudflare, or Microsoft documentation as evidence for "
+        "Google-specific product details. "
         "Prefer concrete steps, minimal runnable examples, setup prerequisites, decision "
         "points, common mistakes, and verification checks. "
         "Adapt explanations to the learner's level and ask a brief clarifying question only "
         "when the missing detail would materially change the answer. "
         "Use lesson_scaffold when a topic needs a structured teaching path. "
+        "Large documentation tool results may be offloaded out of context with "
+        "a preview; use the preview and offload reference instead of asking the "
+        "tool to resend the same large response. "
         "End substantial lessons with a short knowledge check or practice task. "
         "Mention which documentation source families you used."
     )
+
+
+def context_offloader_plugins(args: argparse.Namespace) -> list[ContextOffloader]:
+    if args.no_context_offload:
+        return []
+    return [
+        ContextOffloader(
+            storage=InMemoryStorage(),
+            max_result_tokens=args.offload_threshold,
+            preview_tokens=args.offload_preview,
+        )
+    ]
 
 
 def make_agent(tools: list[Any], active_sources: list[str], args: argparse.Namespace) -> Agent:
@@ -196,6 +349,7 @@ def make_agent(tools: list[Any], active_sources: list[str], args: argparse.Names
         model=model,
         system_prompt=build_system_prompt(active_sources),
         tools=tools,
+        plugins=context_offloader_plugins(args),
         callback_handler=None,
     )
 
@@ -265,7 +419,27 @@ def parse_args() -> argparse.Namespace:
         "--max-tokens",
         type=int,
         default=DEFAULT_MAX_TOKENS,
-        help="Maximum Bedrock model output tokens.",
+        help=(
+            "Maximum Bedrock model output tokens. Defaults to BEDROCK_MAX_TOKENS "
+            f"or {DEFAULT_MAX_TOKENS}; raise this for models that support larger outputs."
+        ),
+    )
+    parser.add_argument(
+        "--no-context-offload",
+        action="store_true",
+        help="Disable Strands ContextOffloader for large remote documentation tool results.",
+    )
+    parser.add_argument(
+        "--offload-threshold",
+        type=int,
+        default=DEFAULT_OFFLOAD_MAX_RESULT_TOKENS,
+        help="Tool result token threshold above which ContextOffloader stores content out of context.",
+    )
+    parser.add_argument(
+        "--offload-preview",
+        type=int,
+        default=DEFAULT_OFFLOAD_PREVIEW_TOKENS,
+        help="Preview tokens to keep in context for offloaded tool results.",
     )
     parser.add_argument(
         "--bedrock-read-timeout",
@@ -304,21 +478,82 @@ def print_tool_counts(tool_counts: dict[str, int]) -> None:
         print(f"- {label}: {count}")
 
 
+def context_offload_status(args: argparse.Namespace) -> str:
+    if args.no_context_offload:
+        return "ContextOffloader disabled."
+    return (
+        "ContextOffloader enabled "
+        f"(threshold={args.offload_threshold} tokens, preview={args.offload_preview} tokens)."
+    )
+
+
+def token_limit_message(args: argparse.Namespace) -> str:
+    return (
+        "The agent hit the configured Bedrock max token limit before it could finish. "
+        f"Current max_tokens={args.max_tokens}. Try rerunning with a model that supports "
+        "a larger output budget and set --max-tokens higher, or ask for a narrower lesson. "
+        "For example: --max-tokens 16000."
+    )
+
+
+def is_max_tokens_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "max_tokens" in text or "maxtokens" in text or "max tokens" in text
+
+
 def source_label(source: str, url: str) -> str:
     return f"{SOURCE_ENDPOINTS[source]['label']} ({url})"
 
 
-def build_clients(args: argparse.Namespace) -> list[tuple[str, MCPClient]]:
-    clients: list[tuple[str, MCPClient]] = []
+def build_clients(args: argparse.Namespace) -> list[tuple[str, str, str, MCPClient]]:
+    clients: list[tuple[str, str, str, MCPClient]] = []
     for source in selected_sources(args):
         url = source_url(source, args)
         clients.append(
             (
+                source,
                 source_label(source, url),
+                url,
                 make_remote_mcp_client(source, url, args.mcp_startup_timeout),
             )
         )
     return clients
+
+
+def list_fresh_google_tools(
+    source: str,
+    url: str,
+    startup_timeout: int,
+    client: MCPClient,
+) -> list[FreshMCPAgentTool]:
+    entered = False
+    gcp_tools = None
+    try:
+        client.__enter__()
+        entered = True
+        gcp_tools = client.list_tools_sync()
+    finally:
+        if entered:
+            try:
+                client.__exit__(None, None, None)
+            except RuntimeError:
+                if gcp_tools is None:
+                    raise
+                LOGGER.debug("Ignoring %s MCP session close after successful tool sync", source)
+
+    if gcp_tools is None:
+        return []
+
+    return [
+        FreshMCPAgentTool(
+            source=source,
+            url=url,
+            startup_timeout=startup_timeout,
+            mcp_tool=gcp_tool.mcp_tool,
+            tool_name=gcp_tool.tool_name,
+        )
+        for gcp_tool in gcp_tools
+    ]
 
 
 def _sse(payload: dict[str, Any]) -> str:
@@ -349,26 +584,89 @@ def _tool_use_name_from_stream_event(event: dict[str, Any]) -> str:
     return ""
 
 
+def build_web_prompt(question: str, history: list[dict[str, str]]) -> str:
+    bounded_messages = []
+    remaining_chars = MAX_WEB_HISTORY_CHARS
+    for item in reversed(history[-MAX_WEB_HISTORY_MESSAGES:]):
+        role = item.get("role", "user").strip().lower()
+        if role not in {"user", "assistant"}:
+            role = "user"
+        content = item.get("content", "").strip()
+        if not content:
+            continue
+        if remaining_chars <= 0:
+            break
+        content = content[:remaining_chars]
+        remaining_chars -= len(content)
+        bounded_messages.append((role, content))
+
+    bounded_messages.reverse()
+    if not bounded_messages:
+        return question
+
+    transcript = "\n\n".join(
+        f"{role.title()}:\n{content}" for role, content in bounded_messages
+    )
+    return (
+        "Recent browser conversation for follow-up context. Use it to resolve "
+        "references like 'that option' or 'compare those', but re-check connected "
+        "documentation tools for platform-specific factual claims:\n\n"
+        f"{transcript}\n\n"
+        "Current user request:\n"
+        f"{question}"
+    )
+
+
 class ChatRequest(BaseModel):
     message: str
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 
-def run_interactive_loop(agent: Agent) -> None:
-    print("\nAsk follow-up questions. Type 'quit' or 'exit' to stop.\n")
+async def stream_agent_to_stdout(agent: Agent, prompt: str) -> None:
+    wrote_text = False
+    seen_tools: set[str] = set()
+    async for event in agent.stream_async(prompt):
+        data = event.get("data")
+        if data:
+            print(data, end="", flush=True)
+            wrote_text = True
+            continue
+
+        name = _tool_use_name_from_stream_event(event)
+        if name and name not in seen_tools:
+            seen_tools.add(name)
+            print(f"\n[tool: {name}]\n", file=sys.stderr, flush=True)
+
+    if wrote_text:
+        print()
+
+
+def run_interactive_loop(agent: Agent, args: argparse.Namespace) -> None:
+    print("\nAsk follow-up questions. Type 'quit' or 'exit', or press Ctrl-C to stop.\n")
     while True:
         try:
             question = input("teach> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            print("\nGoodbye!")
             return
 
         if question.lower() in {"quit", "exit"}:
+            print("Goodbye!")
             return
         if not question:
             continue
 
         print()
-        print(agent(question))
+        try:
+            asyncio.run(stream_agent_to_stdout(agent, question))
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            return
+        except Exception as exc:
+            if is_max_tokens_error(exc):
+                print(token_limit_message(args))
+            else:
+                raise
         print()
 
 
@@ -417,7 +715,25 @@ HTML_PAGE = """\
       padding-bottom: 10px;
     }
     h1 { margin: 0; font-size: 1.15rem; line-height: 1.2; }
+    .header-tools {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .meta { color: var(--muted); font-size: 0.86rem; white-space: nowrap; }
+    .activity-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: #405064;
+      font-size: 0.82rem;
+      font-weight: 700;
+      margin: 0;
+      white-space: nowrap;
+    }
+    .activity-toggle input { margin: 0; }
     #log {
       min-height: 420px;
       height: calc(100vh - 210px);
@@ -427,6 +743,7 @@ HTML_PAGE = """\
       border: 1px solid var(--line);
       border-radius: 8px;
     }
+    #log.hide-tools .tool { display: none; }
     .msg {
       max-width: 88%;
       margin: 0 0 12px;
@@ -545,7 +862,8 @@ HTML_PAGE = """\
     @media (max-width: 720px) {
       main { width: min(100vw - 20px, 1120px); padding: 10px 0; }
       header { display: block; }
-      .meta { margin-top: 4px; white-space: normal; }
+      .header-tools { justify-content: flex-start; margin-top: 4px; }
+      .meta { white-space: normal; }
       #log { height: calc(100vh - 220px); padding: 10px; }
       .msg { max-width: 100%; }
       form { grid-template-columns: 1fr; }
@@ -557,10 +875,16 @@ HTML_PAGE = """\
 <main>
   <header>
     <h1>Tech Teaching Agent</h1>
-    <div class="meta">AWS · Cloudflare · Microsoft · Google Cloud</div>
+    <div class="header-tools">
+      <div class="meta">AWS · Cloudflare · Microsoft · Google Cloud</div>
+      <label class="activity-toggle" for="show-tools">
+        <input id="show-tools" type="checkbox">
+        Show tool calls
+      </label>
+    </div>
   </header>
 
-  <section id="log" aria-live="polite"></section>
+  <section id="log" class="hide-tools" aria-live="polite"></section>
 
   <section>
     <form id="form">
@@ -581,6 +905,9 @@ const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
+const showTools = document.getElementById("show-tools");
+const transcript = [];
+const maxTranscriptMessages = 12;
 
 function add(cls, text) {
   const div = document.createElement("div");
@@ -597,10 +924,26 @@ function append(target, text) {
   log.scrollTop = log.scrollHeight;
 }
 
-async function streamSSE(response, assistant) {
+async function streamSSE(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let assistant = null;
+  const assistantParts = [];
+
+  function currentAssistant() {
+    if (!assistant) {
+      assistant = add("msg assistant", "");
+      assistantParts.push(assistant);
+    }
+    return assistant;
+  }
+
+  function closeAssistantPart() {
+    if (assistant && (assistant.dataset.markdown || "").trim()) {
+      assistant = null;
+    }
+  }
 
   while (true) {
     const { value, done } = await reader.read();
@@ -614,33 +957,46 @@ async function streamSSE(response, assistant) {
       if (!line) continue;
       const evt = JSON.parse(line.slice(6));
       if (evt.type === "token") {
-        append(assistant, evt.text);
+        append(currentAssistant(), evt.text);
       } else if (evt.type === "tool") {
+        closeAssistantPart();
         add("tool", evt.text);
       } else if (evt.type === "stage") {
+        closeAssistantPart();
         add("stage", evt.text);
       } else if (evt.type === "error") {
+        closeAssistantPart();
         add("error", evt.text);
       }
     }
   }
+
+  return assistantParts
+    .map((part) => part.dataset.markdown || "")
+    .filter((part) => part.trim())
+    .join("\\n\\n");
+}
+
+function recentTranscript() {
+  return transcript.slice(-maxTranscriptMessages);
 }
 
 async function ask(message) {
   add("msg user", message);
-  const assistant = add("msg assistant", "");
   send.disabled = true;
   input.disabled = true;
   try {
     const resp = await fetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message, history: recentTranscript() })
     });
     if (!resp.ok || !resp.body) {
       throw new Error(`HTTP ${resp.status}`);
     }
-    await streamSSE(resp, assistant);
+    const assistantText = await streamSSE(resp);
+    transcript.push({ role: "user", content: message });
+    transcript.push({ role: "assistant", content: assistantText });
   } catch (err) {
     add("error", `Request failed: ${err.message}`);
   } finally {
@@ -664,6 +1020,10 @@ document.querySelectorAll(".chip").forEach((chip) => {
     input.focus();
   });
 });
+
+showTools.addEventListener("change", () => {
+  log.classList.toggle("hide-tools", !showTools.checked);
+});
 </script>
 </body>
 </html>
@@ -671,44 +1031,8 @@ document.querySelectorAll(".chip").forEach((chip) => {
 
 
 def create_web_app(args: argparse.Namespace) -> FastAPI:
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        native_tools = [current_time, lesson_scaffold]
-        synced_tools = list(native_tools)
-        tool_counts = {"native": len(native_tools)}
-        active_source_labels: list[str] = []
-        stack = ExitStack()
-
-        try:
-            for label, client in build_clients(args):
-                try:
-                    stack.enter_context(client)
-                    tools = client.list_tools_sync()
-                except Exception as exc:
-                    if not args.allow_partial:
-                        raise RuntimeError(
-                            f"Could not initialize {label}. Use --allow-partial to continue "
-                            "with the sources that are reachable."
-                        ) from exc
-                    LOGGER.warning("Skipping %s: %s", label, exc)
-                    continue
-
-                synced_tools.extend(tools)
-                tool_counts[label] = len(tools)
-                active_source_labels.append(label)
-
-            if not active_source_labels:
-                raise RuntimeError("No remote MCP documentation sources were available.")
-
-            app.state.agent = make_agent(synced_tools, active_source_labels, args)
-            app.state.tool_counts = tool_counts
-            app.state.active_source_labels = active_source_labels
-            LOGGER.debug("Teaching WebUI loaded tool counts: %s", tool_counts)
-            yield
-        finally:
-            stack.close()
-
-    app = FastAPI(lifespan=lifespan)
+    app = FastAPI()
+    app.state.args = args
 
     @app.middleware("http")
     async def _log_http_request(request: FastAPIRequest, call_next):
@@ -739,14 +1063,14 @@ def create_web_app(args: argparse.Namespace) -> FastAPI:
     async def chat(req: ChatRequest) -> StreamingResponse:
         LOGGER.debug("Received /chat request message_chars=%d", len(req.message))
         return StreamingResponse(
-            _stream_web_turn(app, req.message),
+            _stream_web_turn(app.state.args, req.message, req.history),
             media_type="text/event-stream",
         )
 
     return app
 
 
-async def _stream_web_turn(app: FastAPI, message: str):
+async def _stream_web_turn(args: argparse.Namespace, message: str, history: list[dict[str, str]]):
     question = message.strip()
     if not question:
         yield _sse({"type": "error", "text": "Enter a question."})
@@ -754,33 +1078,75 @@ async def _stream_web_turn(app: FastAPI, message: str):
         return
 
     try:
-        tool_counts = getattr(app.state, "tool_counts", {})
-        source_count = max(0, len(tool_counts) - 1)
-        yield _sse(
-            {
-                "type": "stage",
-                "stage": "sources",
-                "text": f"Using {source_count} documentation source(s).",
-            }
-        )
-        async for event in app.state.agent.stream_async(question):
-            data = event.get("data")
-            if data:
-                yield _sse({"type": "token", "text": data})
-                continue
+        native_tools = [current_time, lesson_scaffold]
+        synced_tools = list(native_tools)
+        tool_counts = {"native": len(native_tools)}
+        active_source_labels: list[str] = []
 
-            name = _tool_use_name_from_stream_event(event)
-            if name:
-                LOGGER.debug("Strands requested tool: %s", name)
-                yield _sse({"type": "tool", "name": name, "text": f"Called {name}"})
+        yield _sse({"type": "stage", "stage": "sources", "text": "Connecting to documentation MCP sources."})
+        with ExitStack() as stack:
+            for source, label, url, client in build_clients(args):
+                try:
+                    if source == "gcp":
+                        tools = list_fresh_google_tools(
+                            source=source,
+                            url=url,
+                            startup_timeout=args.mcp_startup_timeout,
+                            client=client,
+                        )
+                    else:
+                        stack.enter_context(client)
+                        tools = client.list_tools_sync()
+                except Exception as exc:
+                    if not args.allow_partial:
+                        raise RuntimeError(
+                            f"Could not initialize {label}. Use --allow-partial to continue "
+                            "with the sources that are reachable."
+                        ) from exc
+                    LOGGER.warning("Skipping %s: %s", label, exc)
+                    yield _sse({"type": "stage", "stage": "sources", "text": f"Skipping {label}: {exc}"})
+                    continue
 
-            if "result" in event:
-                yield _sse({"type": "stage", "stage": "done", "text": "Agent finished."})
+                synced_tools.extend(tools)
+                tool_counts[label] = len(tools)
+                active_source_labels.append(label)
+
+            if not active_source_labels:
+                raise RuntimeError("No remote MCP documentation sources were available.")
+
+            source_count = max(0, len(tool_counts) - 1)
+            yield _sse(
+                {
+                    "type": "stage",
+                    "stage": "sources",
+                    "text": (
+                        f"Using {source_count} documentation source(s). "
+                        f"{context_offload_status(args)}"
+                    ),
+                }
+            )
+
+            agent = make_agent(synced_tools, active_source_labels, args)
+            prompt = build_web_prompt(question, history)
+            async for event in agent.stream_async(prompt):
+                data = event.get("data")
+                if data:
+                    yield _sse({"type": "token", "text": data})
+                    continue
+
+                name = _tool_use_name_from_stream_event(event)
+                if name:
+                    LOGGER.debug("Strands requested tool: %s", name)
+                    yield _sse({"type": "tool", "name": name, "text": f"Called {name}"})
+
+                if "result" in event:
+                    yield _sse({"type": "stage", "stage": "done", "text": "Agent finished."})
 
         yield _sse({"type": "done"})
     except Exception as exc:
         LOGGER.exception("Teaching WebUI turn failed")
-        yield _sse({"type": "error", "text": str(exc)})
+        text = token_limit_message(args) if is_max_tokens_error(exc) else str(exc)
+        yield _sse({"type": "error", "text": text})
 
 
 def main() -> None:
@@ -805,10 +1171,18 @@ def main() -> None:
     clients = build_clients(args)
 
     with ExitStack() as stack:
-        for label, client in clients:
+        for source, label, url, client in clients:
             try:
-                stack.enter_context(client)
-                tools = client.list_tools_sync()
+                if source == "gcp":
+                    tools = list_fresh_google_tools(
+                        source=source,
+                        url=url,
+                        startup_timeout=args.mcp_startup_timeout,
+                        client=client,
+                    )
+                else:
+                    stack.enter_context(client)
+                    tools = client.list_tools_sync()
             except Exception as exc:
                 if not args.allow_partial:
                     raise RuntimeError(
@@ -827,11 +1201,21 @@ def main() -> None:
 
         agent = make_agent(synced_tools, active_source_labels, args)
         print_tool_counts(tool_counts)
-        print("\nAgent response:\n")
-        print(agent(args.prompt))
+        print(context_offload_status(args))
+        print("\nAgent response (streaming):\n")
+        try:
+            asyncio.run(stream_agent_to_stdout(agent, args.prompt))
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            return
+        except Exception as exc:
+            if is_max_tokens_error(exc):
+                print(token_limit_message(args))
+            else:
+                raise
 
         if args.interactive:
-            run_interactive_loop(agent)
+            run_interactive_loop(agent, args)
 
 
 if __name__ == "__main__":

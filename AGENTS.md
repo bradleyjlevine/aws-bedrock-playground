@@ -112,10 +112,10 @@ aws sso login --profile <profile-name>
 | `anthropic[bedrock]` | Anthropic Messages API via bedrock-mantle |
 | `openai` | OpenAI Responses/Chat Completions API via bedrock-mantle |
 | `aws-bedrock-token-generator` | Mints bearer tokens from AWS credentials for bedrock-mantle |
-| `strands-agents` | Strands agent framework — files 06–12, 14–20, 23, 26–29 |
+| `strands-agents` | Strands agent framework — files 06–12, 14–20, 23, 26–30 |
 | `strands-agents-tools[rss]` | Strands community tools (rss, current_time, handoff_to_user) — files 07, 09, 11, 12, 30 |
 | `prompt-toolkit` | Optional — provides readline-style input for file 11 |
-| `fastapi`, `uvicorn` | WebUI server for files 12, 13, 26, 29 |
+| `fastapi`, `uvicorn` | WebUI server for files 12, 13, 26, 29, 30 |
 | `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py`; direct Unstructured demos in files 24–25; cached PDF references in file 29 |
 | `pypdf` | Fallback PDF text extraction if Unstructured partitioning is unavailable |
 
@@ -135,11 +135,41 @@ AWS Knowledge MCP (`https://knowledge-mcp.global.api.aws`), Cloudflare Docs MCP
 (`https://learn.microsoft.com/api/mcp`). It also supports Google Developer
 Knowledge MCP (`https://developerknowledge.googleapis.com/mcp`) when
 `GCP_DK_MCP_API_KEY` is set, passing that value as the `X-Goog-Api-Key` header.
+Google uses Strands' built-in `MCPClient` over Streamable HTTP with an
+`httpx.AsyncClient` configured by `create_mcp_http_client(headers=...)`; do not
+pass the key directly through deprecated `streamable_http_client(headers=...)`.
+Because Google Developer Knowledge can close idle Streamable HTTP sessions during
+long multi-provider agent turns, file 30 syncs Google's MCP tool schemas at
+startup and exposes wrappers that open a fresh Google MCP session for each
+`gcp_*` tool call. Preserve that fresh-session behavior for both CLI and WebUI
+paths.
 Preserve these defaults unless a provider changes its published endpoint. Keep
 the endpoint overrides as environment variables and CLI flags so the example
 remains easy to test when a single provider is unavailable. File 30's `--web`
 mode should keep using FastAPI/SSE and the shared `webui_markdown.py` renderer
-instead of forking Markdown rendering in the HTML.
+instead of forking Markdown rendering in the HTML. Keep tool calls hidden by
+default behind the **Show tool calls** toggle so the teaching UI stays readable
+while still exposing MCP activity when requested. In `--web` mode, open remote
+MCP clients inside each `/chat` stream rather than storing MCP tool objects in
+FastAPI lifespan state; remote docs servers can close idle sessions, which
+causes `MCPClientInitializationError: the client session is not running` on
+later turns. Preserve follow-up support by sending bounded browser transcript
+history in the chat request and rebuilding the agent inside the active MCP
+client context for that turn. Keep Strands ContextOffloader enabled by default
+for file 30 because remote docs MCP tools can return large pages across
+follow-up turns; preserve the `--no-context-offload`, `--offload-threshold`, and
+`--offload-preview` controls when editing this example. File 30 defaults to
+`8192` output tokens and also supports `BEDROCK_MAX_TOKENS` plus `--max-tokens`;
+keep those controls because docs-grounded lessons can hit Strands' max-token
+agent-loop failure with the old `4096` budget. CLI mode should stream
+`agent.stream_async(...)` tokens to stdout and show only compact tool markers on
+stderr so long docs-grounded runs do not look hung. Keep raw streamed response
+bodies out of file 30's DEBUG log by raising the noisy transport/body loggers
+above DEBUG. Do not let the agent infer that
+`GCP_DK_MCP_API_KEY` is expired or invalid from generic Google MCP/tool errors;
+only report that when the HTTP response or MCP tool result explicitly says the
+key was rejected, invalid, or expired. Otherwise say Google docs were not
+verified in that run.
 
 ### Strands @tool decorator (file 08)
 The decorator reads the function's type annotations and docstring to build the Bedrock tool spec automatically. The docstring must have an `Args:` section for each parameter and a `Returns:` section.
@@ -165,7 +195,7 @@ Any callable `(**kwargs)` works as `callback_handler=`. Key kwargs:
 ### WebUI streaming (file 12)
 For browser/server scenarios, set `callback_handler=None` and consume `agent.stream_async(prompt)` directly — each yielded event has the same `data` / `event` shape, but you control where the bytes go. File 12 wraps each event into a JSON SSE frame (`data: {...}\n\n`) so the browser can render tokens incrementally with `fetch().body.getReader()`.
 
-### WebUI Markdown rendering (files 12, 13, 26, 29)
+### WebUI Markdown rendering (files 12, 13, 26, 29, 30)
 The browser UIs share `webui_markdown.py` for dependency-free client-side Markdown rendering. Do not paste or fork `renderMarkdown()` inside individual HTML strings; import `MARKDOWN_RENDERER_JS` and inject it into the page. When changing Markdown behavior or presentation, update the shared renderer and run `node scripts/check_webui_markdown.js`.
 
 The QA script covers representative streamed model output: headings, paragraphs, inline code, emphasis, strikethrough, links/autolinks, blockquotes, ordered/unordered/task lists, strict and loose tables, escaped table pipes, fenced code blocks, partial streaming chunks, and HTML/script escaping.

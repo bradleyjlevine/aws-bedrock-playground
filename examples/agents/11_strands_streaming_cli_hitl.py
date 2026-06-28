@@ -180,16 +180,20 @@ def main():
             user_input = input("\nYou: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
-            sys.exit(0)
+            return
 
         if not user_input:
             continue
         if user_input.lower() in {"quit", "exit"}:
             print("Goodbye!")
-            sys.exit(0)
+            return
 
         print("Assistant: ", end="", flush=True)
-        agent(user_input)
+        try:
+            agent(user_input)
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            return
 
 
 if __name__ == "__main__":
