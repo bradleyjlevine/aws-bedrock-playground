@@ -25,6 +25,7 @@ LOGGER = configure_script_logging(__file__)
 import argparse
 import asyncio
 import os
+import shlex
 import subprocess
 import textwrap
 
@@ -55,7 +56,7 @@ async def _run_in_sandbox(source: str) -> str:
     sandbox = DockerSandbox(CONTAINER, working_dir="/tmp")
     path = "/tmp/suspicious.py"
     await sandbox.write_text(path, source)
-    compile_result = await sandbox.execute(f"python -m py_compile {path}")
+    compile_result = await sandbox.execute("python -m py_compile " + shlex.quote(path))
     ast_result = await sandbox.execute(
         "python - <<'PY'\n"
         "import ast, pathlib\n"

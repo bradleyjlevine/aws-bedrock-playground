@@ -6,9 +6,9 @@ fallback for environments missing optional OCR/layout dependencies.
 """
 import io
 from pathlib import Path
+from typing import Any
 
 import pypdf
-from unstructured.partition.pdf import partition_pdf
 
 
 def _elements_to_text(elements) -> str:
@@ -26,10 +26,16 @@ def _pypdf_text_from_bytes(pdf_bytes: bytes) -> str:
     return "\n\n".join(pages).strip()
 
 
+def _partition_pdf(**kwargs: Any):
+    from unstructured.partition.pdf import partition_pdf
+
+    return partition_pdf(**kwargs)
+
+
 def extract_pdf_text_from_bytes(pdf_bytes: bytes) -> str:
     """Extract text from PDF bytes with Unstructured, falling back to pypdf."""
     try:
-        elements = partition_pdf(file=io.BytesIO(pdf_bytes))
+        elements = _partition_pdf(file=io.BytesIO(pdf_bytes))
         text = _elements_to_text(elements)
         if text:
             return text
@@ -44,7 +50,7 @@ def extract_pdf_text_from_path(path: str | Path) -> str:
     """Extract text from a PDF path with Unstructured, falling back to pypdf."""
     pdf_path = Path(path)
     try:
-        elements = partition_pdf(filename=str(pdf_path))
+        elements = _partition_pdf(filename=str(pdf_path))
         text = _elements_to_text(elements)
         if text:
             return text

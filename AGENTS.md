@@ -12,6 +12,7 @@ Hello-world examples for AWS Bedrock: foundation models, agents, and the bedrock
 uv sync                        # install dependencies
 uv run python examples/<group>/<file>.py        # run a script
 AWS_PROFILE=<profile> uv run python examples/<group>/<file>.py  # run with a specific SSO profile
+uv run python scripts/check_examples.py         # local no-AWS validation
 node scripts/check_webui_markdown.js            # validate shared WebUI Markdown rendering
 ```
 
@@ -19,7 +20,9 @@ node scripts/check_webui_markdown.js            # validate shared WebUI Markdown
 
 ```
 auth.py                        # shared auth helper — DO NOT modify without reading the note below
+arithmetic_utils.py            # safe arithmetic expression evaluator for calculator tools
 webui_markdown.py              # shared browser-side Markdown renderer for WebUI examples
+scripts/check_examples.py      # local no-AWS validation script
 scripts/check_webui_markdown.js # Node QA script for WebUI Markdown rendering
 examples/core/                 # Bedrock Runtime basics and guardrails
 examples/mantle/               # bedrock-mantle examples and Strands mantle adapters
@@ -56,6 +59,7 @@ examples/cybersecurity/27_strands_detection_engineering.py # Strands structured 
 examples/cybersecurity/28_strands_iam_policy_risk_review.py # Strands structured output: IAM policy risk + least-privilege review
 examples/cybersecurity/29_strands_threat_intel_risk_chat.py # Strands CLI/WebUI chat: threat intel, paginated ATT&CK/ATLAS tools, cached PDF framework refs, FAIR ALE/ROSI risk analysis
 examples/agents/30_strands_remote_mcp_teaching_agent.py # Strands MCP + optional FastAPI/SSE WebUI: tech teaching agent over AWS, Cloudflare, Microsoft, and Google docs MCP servers
+examples/agents/31_bedrock_embeddings_local_rag.py # Bedrock Runtime: Titan embeddings + local in-memory RAG over text/Markdown files
 examples/agents/sessions/      # Created by 09/16 at runtime; safe to delete
 pyproject.toml                 # uv project config
 ```
@@ -118,15 +122,34 @@ aws sso login --profile <profile-name>
 | `fastapi`, `uvicorn` | WebUI server for files 12, 13, 26, 29, 30 |
 | `unstructured[all-docs]` | PDF/document partitioning for files 13–15 via `pdf_utils.py`; direct Unstructured demos in files 24–25; cached PDF references in file 29 |
 | `pypdf` | Fallback PDF text extraction if Unstructured partitioning is unavailable |
+| `defusedxml` | Hardened XML parser for MITRE CAPEC XML in file 29 |
+
+### Local validation
+Run `uv run python scripts/check_examples.py` after shared helper changes. It
+compiles repository Python source, checks the safe arithmetic evaluator, and runs
+the shared WebUI Markdown renderer QA. It intentionally avoids AWS calls.
+
+### PDF extraction fallback
+`pdf_utils.py` imports Unstructured lazily inside extraction calls so examples can
+fall back to `pypdf` even when Unstructured is not installed or its native
+runtime dependencies are unavailable. Direct Unstructured demos in files 24 and
+25 still require `unstructured[all-docs]`.
 
 ## What NOT to do
 
 ### Bedrock Runtime model overrides
 Richer Bedrock Runtime Strands examples should generally allow
 `BEDROCK_MODEL_ID` to override the default `MODEL_ID`. This applies to files
-`06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and `26`-`30`. Keep tiny
+`06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and `26`-`31`. Keep tiny
 hello-world examples, Mantle path-specific examples, and Nova Sonic fixed unless
 there is a specific reason to generalize them.
+
+### Local embeddings RAG (file 31)
+File 31 uses Bedrock Runtime `InvokeModel` with Amazon Titan Text Embeddings V2
+(`amazon.titan-embed-text-v2:0`) to embed local `.txt` / `.md` chunks, ranks
+them in memory with cosine similarity, then answers with Converse. It has no
+external vector database. `BEDROCK_MODEL_ID` controls the answer model, and
+`BEDROCK_EMBEDDING_MODEL_ID` controls the embedding model.
 
 ### Remote documentation MCP teaching agent (file 30)
 File 30 connects to three unauthenticated Streamable HTTP docs MCP endpoints by default:

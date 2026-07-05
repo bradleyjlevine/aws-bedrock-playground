@@ -32,6 +32,7 @@ from logging_utils import configure_script_logging
 LOGGER = configure_script_logging(__file__)
 import os
 import sys
+from arithmetic_utils import evaluate_arithmetic_expression
 import boto3
 from strands import Agent, tool
 from strands.models import BedrockModel
@@ -77,11 +78,8 @@ def calculator(expression: str) -> str:
     Returns:
         The result as a string, or an error message if evaluation fails.
     """
-    allowed = set("0123456789+-*/()., **")
-    if not all(c in allowed for c in expression.replace(" ", "")):
-        return "Error: expression contains disallowed characters."
     try:
-        result = eval(expression, {"__builtins__": {}})  # noqa: S307 — guarded above
+        result = evaluate_arithmetic_expression(expression)
         return str(result)
     except Exception as exc:
         return f"Error: {exc}"

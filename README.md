@@ -14,6 +14,7 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 | HITL (Human in the Loop) | `11`, `12` | CLI approval with `handoff_to_user` and browser approval with Strands interrupts before a sensitive `send_email` tool runs. |
 | Streaming UI / SSE | `12`, `13`, `26`, `29`, `30` | Browser apps that stream tokens and status updates with FastAPI and Server-Sent Events, with shared Markdown rendering for model output. |
 | Document extraction / RAG prep | `13`-`15`, `24`, `25`, `26`, `29` | Unstructured PDF extraction, element-level JSONL, source-attributed prompt chunks, and PDF/URL threat-report context. |
+| Embeddings / local RAG | `31` | Titan Text Embeddings V2, local text/Markdown chunking, in-memory cosine retrieval, and cited answers through Converse. |
 | Cyber detection / policy review | `26`-`29` | WAF log investigation, detection engineering, IAM least-privilege review, threat-intel mapping, and risk analysis. |
 | Guardrails and safety controls | `06`, `11`, `12`, `19` | Bedrock guardrails, approval gates for sensitive actions, and DockerSandbox-based static code triage. |
 | Voice / bidirectional streaming | `18` | Amazon Nova Sonic through Strands bidirectional streaming with microphone/speaker IO. |
@@ -52,6 +53,7 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 | `examples/cybersecurity/28_strands_iam_policy_risk_review.py` | GPT OSS 120B | Strands structured output · `bedrock-runtime` | Reviews IAM policy JSON for wildcard permissions, privilege-escalation paths, and least-privilege fixes |
 | `examples/cybersecurity/29_strands_threat_intel_risk_chat.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Interactive CLI or FastAPI/SSE WebUI threat-intel and risk chat with CVE/EUVD, CWE/CAPEC, paginated MITRE ATT&CK Enterprise and MITRE ATLAS tools, OWASP Top 10 2025/2021, cached Security Cards/Unified Kill Chain PDF references, FAIR Monte Carlo ALE, and ROSI tools |
 | `examples/agents/30_strands_remote_mcp_teaching_agent.py` | Claude Haiku 4.5 | Strands MCP · `bedrock-runtime` + remote docs MCP | CLI or FastAPI/SSE tech teaching agent that uses AWS Knowledge, Cloudflare Docs, Microsoft Learn, and optional Google Developer Knowledge MCP servers to teach how to do tasks across platforms, with ContextOffloader for large docs tool responses |
+| `examples/agents/31_bedrock_embeddings_local_rag.py` | Titan Text Embeddings V2 + Claude Haiku 4.5 | InvokeModel embeddings + Converse · `bedrock-runtime` | Local `.txt` / `.md` RAG demo: chunk files, embed with `amazon.titan-embed-text-v2:0`, cosine-rank in memory, and answer with source citations |
 
 ## Cybersecurity examples matrix
 
@@ -95,6 +97,10 @@ brew install \
   libreoffice \
   pandoc
 ```
+
+The shared `pdf_utils.py` helper falls back to `pypdf` if Unstructured is absent
+or cannot partition a PDF at runtime. The direct Unstructured demos in files `24`
+and `25` still require Unstructured and its native dependencies.
 
 ## Authentication
 
@@ -202,12 +208,20 @@ The mantle endpoint uses two different base paths depending on the model:
 - `examples/cybersecurity/28_strands_iam_policy_risk_review.py` demonstrates structured IAM least-privilege review. The agent uses local policy-analysis tools to identify wildcard actions/resources and sensitive permissions such as `iam:PassRole`, then returns a typed risk review with practical fixes and candidate condition keys.
 - `examples/cybersecurity/29_strands_threat_intel_risk_chat.py` runs an interactive threat-intel chat agent in CLI mode or with `--web` as a FastAPI/SSE browser chat on `http://127.0.0.1:8003`. The CLI exits cleanly on `quit`, `exit`, or Ctrl-C. It can enrich CVE/EUVD records through Shodan CVEDB, pull bounded CWE/CAPEC definition excerpts from MITRE pages, query MITRE ATT&CK Enterprise tactics/techniques/software/groups with paginated list/search tools and group/software relationship tools, query MITRE ATLAS tactics/techniques/case studies/mitigations/software with paginated list/search tools and exact record lookup, map scenarios to OWASP Top 10:2025 or 2021, generate STRIDE/PASTA/Lockheed Kill Chain/Unified Kill Chain/Security Cards prompts, extract the official Security Cards and Unified Kill Chain PDFs to cached markdown under `downloads/threat_model_refs/`, run FAIR-style Monte Carlo ALE simulations, and calculate ROSI to help justify security tool or control cost.
 - `examples/agents/30_strands_remote_mcp_teaching_agent.py` runs a documentation-grounded teaching agent for learning how to do tasks across AWS, Cloudflare, Microsoft, and Google Cloud platforms. It connects to AWS Knowledge MCP (`https://knowledge-mcp.global.api.aws`), Cloudflare Docs MCP (`https://docs.mcp.cloudflare.com/mcp`), and Microsoft Learn MCP (`https://learn.microsoft.com/api/mcp`) by default, then automatically adds Google Developer Knowledge MCP (`https://developerknowledge.googleapis.com/mcp`) when `GCP_DK_MCP_API_KEY` is set. Google uses Strands' built-in `MCPClient` over Streamable HTTP with `X-Goog-Api-Key` supplied from that environment variable; its `gcp_*` tool wrappers open a fresh Google MCP session per call so long multi-provider turns do not reuse a closed idle session. The agent uses the relevant documentation tools before giving platform-specific steps, tradeoffs, common mistakes, verification checks, and a short knowledge check. Strands ContextOffloader is enabled by default so large remote documentation tool responses are stored out of context with a bounded preview; use `--no-context-offload`, `--offload-threshold`, and `--offload-preview` to tune it. The default output budget is `8192` tokens; use `BEDROCK_MAX_TOKENS` or `--max-tokens` with larger-output models when lessons need more room. Use `--interactive` to keep the same CLI session open for follow-up questions, `--web` to run the browser chat UI on `http://127.0.0.1:8004`, `--source` to focus on one or more providers, and `--allow-partial` when one remote docs MCP server is unavailable. CLI mode streams answer tokens as they arrive and prints compact tool-call markers instead of waiting for the whole agent run to finish. The WebUI hides tool calls by default behind a **Show tool calls** toggle, separates assistant output around tool/stage boundaries, sends a bounded recent transcript for follow-up context, and opens fresh MCP client sessions for each chat turn so remote docs connections cannot go stale between requests. CLI modes exit cleanly on `quit`, `exit`, or Ctrl-C.
+- `examples/agents/31_bedrock_embeddings_local_rag.py` demonstrates local RAG without a vector database. It reads Markdown or text files, splits them into bounded chunks, embeds each chunk and the question with Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`) through `InvokeModel`, ranks chunks in memory with cosine similarity, and asks a Bedrock Runtime Converse model to answer with bracketed source IDs. Use `--dry-run` to check file loading/chunking without calling Bedrock.
 
 ## WebUI Markdown rendering
 
 The browser examples `12`, `13`, `26`, `29`, and `30` inject the shared renderer from `webui_markdown.py` so streamed model output renders consistently across all WebUIs. The renderer is dependency-free browser JavaScript and covers common model response shapes: headings, paragraphs, inline code, emphasis, strikethrough, links/autolinks, blockquotes, ordered/unordered/task lists, pipe tables, fenced code, partial streaming chunks, and HTML escaping.
 
-Run the local renderer check after changing `webui_markdown.py` or any WebUI HTML/CSS that displays model Markdown:
+Run the local no-AWS validation script after changing shared helpers or examples:
+
+```bash
+uv run python scripts/check_examples.py
+```
+
+Run the narrower renderer check after changing only `webui_markdown.py` or WebUI
+HTML/CSS that displays model Markdown:
 
 ```bash
 node scripts/check_webui_markdown.js
@@ -242,6 +256,8 @@ uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py
 uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --interactive
 uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --web
 uv run python examples/agents/30_strands_remote_mcp_teaching_agent.py --prompt "Teach me how to deploy a static site on Cloudflare, AWS, and Microsoft."
+uv run python examples/agents/31_bedrock_embeddings_local_rag.py --dry-run
+uv run python examples/agents/31_bedrock_embeddings_local_rag.py --path README.md --path AGENTS.md --question "How do I validate the examples?"
 ```
 
 For richer Bedrock Runtime Strands examples, override the default model with
@@ -253,7 +269,7 @@ BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 \
 ```
 
 This applies to files `06`, `07`, `09`-`12`, `14`-`17`, `19`, `20`, `23`, and
-`26`-`30`. The smallest hello-world examples, Mantle path-specific examples,
+`26`-`31`. The smallest hello-world examples, Mantle path-specific examples,
 and Nova Sonic voice example keep fixed model IDs because their purpose or
 transport is model-specific.
 

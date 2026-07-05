@@ -42,7 +42,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 import boto3
 from fastapi import FastAPI
