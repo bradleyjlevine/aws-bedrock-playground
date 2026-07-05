@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from logging_utils import configure_script_logging
+from logging_utils import configure_script_logging, install_http_request_logging_middleware
 
 LOGGER = configure_script_logging(__file__)
 import argparse
@@ -35,7 +35,6 @@ import os
 import random
 import re
 import statistics
-import time
 import zipfile
 from functools import lru_cache
 from typing import Any
@@ -46,7 +45,6 @@ from defusedxml import ElementTree
 
 import boto3
 from fastapi import FastAPI
-from fastapi import Request as FastAPIRequest
 from fastapi.responses import HTMLResponse, StreamingResponse
 import uvicorn
 from pydantic import BaseModel
@@ -1864,25 +1862,7 @@ app = FastAPI()
 _web_agent: Agent | None = None
 
 
-@app.middleware("http")
-async def _log_http_request(request: FastAPIRequest, call_next):
-    start = time.perf_counter()
-    LOGGER.debug("HTTP request start method=%s path=%s", request.method, request.url.path)
-    try:
-        response = await call_next(request)
-    except Exception:
-        LOGGER.exception("HTTP request failed method=%s path=%s", request.method, request.url.path)
-        raise
-
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    LOGGER.debug(
-        "HTTP request complete method=%s path=%s status=%d elapsed_ms=%.1f",
-        request.method,
-        request.url.path,
-        response.status_code,
-        elapsed_ms,
-    )
-    return response
+install_http_request_logging_middleware(app, LOGGER)
 
 
 class ChatRequest(BaseModel):

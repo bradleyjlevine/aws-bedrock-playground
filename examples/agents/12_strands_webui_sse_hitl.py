@@ -38,19 +38,18 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from logging_utils import configure_script_logging
+from logging_utils import configure_script_logging, install_http_request_logging_middleware
 from webui_markdown import MARKDOWN_RENDERER_JS
 
 LOGGER = configure_script_logging(__file__)
 import json
 import os
-import time
 from typing import Any
 
 from arithmetic_utils import evaluate_arithmetic_expression
 import boto3
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from strands import Agent, tool
@@ -169,27 +168,7 @@ agent = Agent(
 # ---------------------------------------------------------------------------
 
 app = FastAPI()
-
-
-@app.middleware("http")
-async def _log_http_request(request: Request, call_next):
-    start = time.perf_counter()
-    LOGGER.debug("HTTP request start method=%s path=%s", request.method, request.url.path)
-    try:
-        response = await call_next(request)
-    except Exception:
-        LOGGER.exception("HTTP request failed method=%s path=%s", request.method, request.url.path)
-        raise
-
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    LOGGER.debug(
-        "HTTP request complete method=%s path=%s status=%d elapsed_ms=%.1f",
-        request.method,
-        request.url.path,
-        response.status_code,
-        elapsed_ms,
-    )
-    return response
+install_http_request_logging_middleware(app, LOGGER)
 
 
 # Track which interrupt_ids are currently awaiting a decision so /approve

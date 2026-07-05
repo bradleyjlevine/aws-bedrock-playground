@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from logging_utils import configure_script_logging
+from logging_utils import configure_script_logging, install_http_request_logging_middleware
 from webui_markdown import MARKDOWN_RENDERER_JS
 
 import argparse
@@ -30,7 +30,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from contextlib import ExitStack
 from typing import Any
 
@@ -47,7 +46,6 @@ import boto3
 import uvicorn
 from botocore.config import Config as BotocoreConfig
 from fastapi import FastAPI
-from fastapi import Request as FastAPIRequest
 from fastapi.responses import HTMLResponse, StreamingResponse
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from mcp.types import Tool as MCPTool
@@ -1033,26 +1031,7 @@ showTools.addEventListener("change", () => {
 def create_web_app(args: argparse.Namespace) -> FastAPI:
     app = FastAPI()
     app.state.args = args
-
-    @app.middleware("http")
-    async def _log_http_request(request: FastAPIRequest, call_next):
-        start = time.perf_counter()
-        LOGGER.debug("HTTP request start method=%s path=%s", request.method, request.url.path)
-        try:
-            response = await call_next(request)
-        except Exception:
-            LOGGER.exception("HTTP request failed method=%s path=%s", request.method, request.url.path)
-            raise
-
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        LOGGER.debug(
-            "HTTP request complete method=%s path=%s status=%d elapsed_ms=%.1f",
-            request.method,
-            request.url.path,
-            response.status_code,
-            elapsed_ms,
-        )
-        return response
+    install_http_request_logging_middleware(app, LOGGER)
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:

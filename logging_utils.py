@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
+from typing import Any
 
 
 def configure_script_logging(script_file: str, *, level: int = logging.DEBUG) -> logging.Logger:
@@ -48,3 +50,27 @@ def configure_script_logging(script_file: str, *, level: int = logging.DEBUG) ->
     logger = logging.getLogger(script_path.stem)
     logger.debug("Logging initialized at %s", log_path)
     return logger
+
+
+def install_http_request_logging_middleware(app: Any, logger: logging.Logger) -> None:
+    """Register FastAPI middleware that DEBUG-logs each request's timing and status."""
+
+    @app.middleware("http")
+    async def _log_http_request(request: Any, call_next: Any) -> Any:
+        start = time.perf_counter()
+        logger.debug("HTTP request start method=%s path=%s", request.method, request.url.path)
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception("HTTP request failed method=%s path=%s", request.method, request.url.path)
+            raise
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.debug(
+            "HTTP request complete method=%s path=%s status=%d elapsed_ms=%.1f",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
+        return response
