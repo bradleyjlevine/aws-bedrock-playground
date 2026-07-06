@@ -6,13 +6,16 @@ Creates a three-agent swarm that:
   - Filters the briefing scope to the last 14 days by default
   - Fetches relevant article pages for more detail before summarising
   - Optionally calls Exa's remote MCP web-search tool from EXA_API_KEY
+  - Optionally calls Playwright MCP for Chrome-rendered article fallbacks
   - Runs on the configured Bedrock Runtime model
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
 Exa:     export EXA_API_KEY=...
+Chrome:  install Chrome before using --playwright-mcp
 Run:     uv run python examples/agents/23_strands_rss_exa_swarm.py
          uv run python examples/agents/23_strands_rss_exa_swarm.py --feed https://example.com/feed.xml
+         uv run python examples/agents/23_strands_rss_exa_swarm.py --playwright-mcp
 """
 
 from pathlib import Path
@@ -28,14 +31,17 @@ LOGGER = configure_script_logging(__file__)
 import argparse
 import os
 import uuid
+import warnings
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import boto3
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound, XMLParsedAsHTMLWarning
 from botocore.config import Config as BotocoreConfig
+from mcp import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from strands import Agent, tool
 from strands.models import BedrockModel
@@ -50,15 +56,16 @@ MODEL_ID = os.environ.get(
     "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 )
 DEFAULT_DAYS = 14
-DEFAULT_MAX_ARTICLES = 10
-DEFAULT_FEED_LIMIT = 3
-DEFAULT_MODEL_MAX_TOKENS = 4_096
+DEFAULT_MAX_ARTICLES = 25
+DEFAULT_FEED_LIMIT = 4
+DEFAULT_MODEL_MAX_TOKENS = 16_420
 DEFAULT_BEDROCK_READ_TIMEOUT = 300
 DEFAULT_BEDROCK_CONNECT_TIMEOUT = 10
-DEFAULT_OFFLOAD_MAX_RESULT_TOKENS = 1_500
-DEFAULT_OFFLOAD_PREVIEW_TOKENS = 500
+DEFAULT_OFFLOAD_MAX_RESULT_TOKENS = 2_500
+DEFAULT_OFFLOAD_PREVIEW_TOKENS = 750
 ARTICLE_MAX_CHARS = 12_000
 EXA_MCP_BASE_URL = "https://mcp.exa.ai/mcp"
+DEFAULT_PLAYWRIGHT_MCP_PACKAGE = os.environ.get("PLAYWRIGHT_MCP_PACKAGE", "@playwright/mcp@latest")
 DEFAULT_FEEDS = [
     "https://www.schneier.com/feed/atom/",
     "https://krebsonsecurity.com/feed/",
@@ -110,6 +117,17 @@ def make_exa_mcp_client(api_key: str) -> MCPClient:
     return MCPClient(lambda: streamable_http_client(f"{EXA_MCP_BASE_URL}?{query}"))
 
 
+def make_playwright_mcp_client(package: str) -> MCPClient:
+    return MCPClient(
+        lambda: stdio_client(
+            StdioServerParameters(
+                command="npx",
+                args=[package],
+            )
+        )
+    )
+
+
 def browser_headers_for(url: str) -> dict[str, str]:
     parsed = urlparse(url)
     origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else url
@@ -117,7 +135,15 @@ def browser_headers_for(url: str) -> dict[str, str]:
 
 
 def clean_article_text(html: str) -> tuple[str, str]:
-    soup = BeautifulSoup(html, "html.parser")
+    stripped = html.lstrip()
+    parser = "xml" if stripped.startswith(("<?xml", "<rss", "<feed")) else "html.parser"
+    try:
+        soup = BeautifulSoup(html, parser)
+    except FeatureNotFound:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+            soup = BeautifulSoup(html, "html.parser")
+
     for tag in soup(["script", "style", "noscript", "svg", "form", "nav", "footer", "aside"]):
         tag.decompose()
 
@@ -140,6 +166,50 @@ def clean_article_text(html: str) -> tuple[str, str]:
     return title, "\n".join(deduped)[:ARTICLE_MAX_CHARS]
 
 
+def compact_rss_entries(entries: list[Any], limit: int) -> list[dict[str, Any]]:
+    compact_entries = []
+    for entry in entries[:limit]:
+        if not isinstance(entry, dict):
+            continue
+        tags = entry.get("tags") or entry.get("categories") or []
+        categories = []
+        for tag in tags:
+            if isinstance(tag, dict):
+                value = tag.get("term") or tag.get("label")
+            else:
+                value = str(tag)
+            if value:
+                categories.append(value)
+
+        compact_entries.append(
+            {
+                "title": entry.get("title", "Untitled"),
+                "link": entry.get("link", ""),
+                "published": entry.get("published") or entry.get("updated") or "Unknown date",
+                "author": entry.get("author", "Unknown author"),
+                "categories": categories[:5],
+            }
+        )
+    return compact_entries
+
+
+def fetch_rss_feed_direct(url: str, limit: int) -> dict[str, Any]:
+    try:
+        response = requests.get(url, timeout=25, headers=browser_headers_for(url))
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        return {"feed_url": url, "error": str(exc)}
+
+    parsed = rss_tool.feedparser.parse(response.content)
+    entries = compact_rss_entries(list(parsed.entries), limit)
+    result: dict[str, Any] = {"feed_url": url, "max_entries": limit, "entries": entries}
+    if getattr(parsed, "bozo", False):
+        result["parse_warning"] = str(getattr(parsed, "bozo_exception", "Unknown feed parse warning"))
+    if not entries:
+        result["error"] = "Feed contains no entries."
+    return result
+
+
 @tool
 def fetch_rss_feed(url: str, max_entries: int = DEFAULT_FEED_LIMIT) -> dict[str, Any]:
     """Fetch a bounded RSS feed using the Strands community rss tool.
@@ -152,27 +222,26 @@ def fetch_rss_feed(url: str, max_entries: int = DEFAULT_FEED_LIMIT) -> dict[str,
         A compact feed result with title, link, published date, author, and categories.
     """
     limit = max(1, min(max_entries, 10))
-    result = rss_tool(action="fetch", url=url, max_entries=limit, include_content=False)
-    if isinstance(result, dict) and result.get("status") == "error":
-        return {"feed_url": url, "error": result}
-    if not isinstance(result, list):
-        return {"feed_url": url, "error": result}
-
-    entries = []
-    for entry in result[:limit]:
-        if not isinstance(entry, dict):
-            continue
-        entries.append(
-            {
-                "title": entry.get("title", "Untitled"),
-                "link": entry.get("link", ""),
-                "published": entry.get("published", "Unknown date"),
-                "author": entry.get("author", "Unknown author"),
-                "categories": (entry.get("categories") or [])[:5],
-            }
+    rss_callable = getattr(rss_tool, "rss", rss_tool)
+    try:
+        result = rss_callable(
+            action="fetch",
+            url=url,
+            max_entries=limit,
+            include_content=False,
+            headers=browser_headers_for(url),
         )
+    except Exception as exc:
+        fallback = fetch_rss_feed_direct(url, limit)
+        fallback["rss_tool_error"] = f"{type(exc).__name__}: {exc}"
+        return fallback
 
-    return {"feed_url": url, "max_entries": limit, "entries": entries}
+    if isinstance(result, list):
+        return {"feed_url": url, "max_entries": limit, "entries": compact_rss_entries(result, limit)}
+
+    fallback = fetch_rss_feed_direct(url, limit)
+    fallback["rss_tool_error"] = result
+    return fallback
 
 
 @tool
@@ -277,11 +346,15 @@ def build_swarm(
     offload_preview_tokens: int,
     enable_context_offload: bool = True,
     enable_exa_search: bool = False,
+    extra_article_tools: list[Any] | None = None,
+    enable_playwright_browser: bool = False,
 ) -> Swarm:
     model = make_model(read_timeout, connect_timeout, max_tokens)
     article_tools: list[Any] = [fetch_article]
     if enable_exa_search:
         article_tools.append(exa_web_search)
+    if extra_article_tools:
+        article_tools.extend(extra_article_tools)
     offload_storage = InMemoryStorage()
 
     def context_offloader_plugins() -> list[ContextOffloader]:
@@ -313,10 +386,20 @@ structured list. Do not write the final briefing yourself.""",
         callback_handler=None,
     )
 
+    rendered_browser_guidance = """
+If Playwright MCP tools are available, use them only as a rendered-page fallback:
+first call fetch_article for the URL, then use Playwright when fetch_article
+returns an error, very little text, obvious boilerplate/navigation/template text,
+or content that appears to be a JavaScript shell instead of the article body.
+When using Playwright, navigate to the source URL, wait for the page to settle,
+extract the visible article text, keep the result bounded, and preserve the URL
+and any rendering limitation. Playwright MCP requires Chrome to be installed on
+the machine running this example.""" if enable_playwright_browser else ""
+
     article_researcher = Agent(
         name="article_researcher",
         model=model,
-        system_prompt="""You enrich RSS items with article-page details.
+        system_prompt=f"""You enrich RSS items with article-page details.
 
 Select the most relevant and non-duplicative article URLs from the feed list,
 respecting the user's max article count. Prefer primary articles, major security
@@ -325,6 +408,7 @@ fetch_article for each selected URL. Use remote MCP web-search tools when they
 are available to find relevant corroborating or follow-up coverage, especially
 when a feed item is sparse, an article fetch fails, or the topic needs extra
 context. Preserve source URLs and note fetch or search errors.
+{rendered_browser_guidance}
 
 After fetching details, always hand off to briefing_writer with the RSS list,
 article details, web-search findings, and fetch errors. Do not write the final
@@ -385,6 +469,21 @@ def main() -> None:
         "--no-exa",
         action="store_true",
         help="Disable Exa remote MCP web-search tools even when EXA_API_KEY is set.",
+    )
+    parser.add_argument(
+        "--playwright-mcp",
+        action="store_true",
+        default=os.environ.get("ENABLE_PLAYWRIGHT_MCP", "").strip().lower()
+        in {"1", "true", "yes", "on"},
+        help=(
+            "Enable Playwright MCP browser tools as a fallback for dynamic articles. "
+            "Requires Chrome installed."
+        ),
+    )
+    parser.add_argument(
+        "--playwright-mcp-package",
+        default=DEFAULT_PLAYWRIGHT_MCP_PACKAGE,
+        help="npm package spec for Playwright MCP, default: %(default)s.",
     )
     parser.add_argument(
         "--read-timeout",
@@ -450,28 +549,45 @@ write the final briefing."""
         parser.error("--offload-preview must be less than --offload-threshold")
 
     enable_context_offload = not args.no_context_offload
-    swarm = build_swarm(
-        args.read_timeout,
-        args.connect_timeout,
-        args.max_tokens,
-        args.offload_threshold,
-        args.offload_preview,
-        enable_context_offload,
-        enable_exa_search,
-    )
     exa_status = "enabled" if enable_exa_search else "disabled"
     offload_status = (
         f"enabled over {args.offload_threshold} tokens"
         if enable_context_offload
         else "disabled"
     )
-    print(
-        f"Collecting {len(feeds)} RSS feeds with up to {args.feed_limit} items per feed, "
-        f"fetching up to {args.max_articles} articles, Exa MCP web search is {exa_status}, "
-        f"ContextOffloader is {offload_status}, Bedrock read timeout is {args.read_timeout}s, "
-        f"and max_tokens is {args.max_tokens}...\n"
-    )
-    result = swarm(prompt)
+
+    with ExitStack() as stack:
+        playwright_tools: list[Any] = []
+        if args.playwright_mcp:
+            playwright_client = stack.enter_context(
+                make_playwright_mcp_client(args.playwright_mcp_package)
+            )
+            playwright_tools = list(playwright_client.list_tools_sync(prefix="playwright_"))
+
+        playwright_status = (
+            f"enabled with {len(playwright_tools)} tools; Chrome must be installed"
+            if playwright_tools
+            else "disabled"
+        )
+        swarm = build_swarm(
+            args.read_timeout,
+            args.connect_timeout,
+            args.max_tokens,
+            args.offload_threshold,
+            args.offload_preview,
+            enable_context_offload,
+            enable_exa_search,
+            playwright_tools,
+            bool(playwright_tools),
+        )
+        print(
+            f"Collecting {len(feeds)} RSS feeds with up to {args.feed_limit} items per feed, "
+            f"fetching up to {args.max_articles} articles, Exa MCP web search is {exa_status}, "
+            f"Playwright MCP fallback is {playwright_status}, "
+            f"ContextOffloader is {offload_status}, Bedrock read timeout is {args.read_timeout}s, "
+            f"and max_tokens is {args.max_tokens}...\n"
+        )
+        result = swarm(prompt)
 
     node_history = [node.node_id for node in result.node_history]
     final_agent = node_history[-1] if node_history else "briefing_writer"

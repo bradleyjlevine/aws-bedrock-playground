@@ -51,7 +51,7 @@ examples/cybersecurity/19_strands_docker_sandbox_code_triage.py # Strands Docker
 examples/agents/20_strands_workflow_research_report.py  # Strands workflow tool for research reports
 examples/mantle/21_strands_mantle_anthropic_adapter.py # Strands custom Anthropic adapter over bedrock-mantle /anthropic
 examples/mantle/22_strands_mantle_openai_gpt54.py  # Strands OpenAI Responses adapter over bedrock-mantle /openai/v1
-examples/agents/23_strands_rss_exa_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search briefing
+examples/agents/23_strands_rss_exa_swarm.py     # Strands Swarm: RSS + article fetching + Exa MCP web-search + optional Playwright MCP Chrome-rendered article fallback
 examples/document-processing/24_pdf_to_unstructured_elements.py # Unstructured OSS: PDF → typed elements JSONL
 examples/document-processing/25_pdf_elements_to_prompt_chunks.py # Unstructured OSS: elements → source-attributed prompt chunks
 examples/cybersecurity/26_strands_elastic_waf_mcp_webui.py # Strands MCP + FastAPI: WAF log search via Elastic Agent Builder MCP
