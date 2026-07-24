@@ -18,6 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install PortAudio development headers
+        run: sudo apt-get update && sudo apt-get install --yes portaudio19-dev
       - name: Install Python and dependencies
         run: uv sync --group dev
       - name: Run no-AWS validation
