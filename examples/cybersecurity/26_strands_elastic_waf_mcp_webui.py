@@ -41,7 +41,6 @@ import json
 import os
 from contextlib import asynccontextmanager
 from contextlib import ExitStack
-from typing import Any
 
 import boto3
 import uvicorn
@@ -54,7 +53,9 @@ from strands.tools.mcp import MCPClient
 
 from cyber_source_utils import fetch_url_markdown
 from pdf_utils import extract_pdf_text_from_bytes
+from webui_interactions import WEBUI_INTERACTIONS_JS
 from webui_markdown import MARKDOWN_RENDERER_JS
+from webui_theme import WEBUI_THEME_CSS
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 MODEL_ID = os.environ.get(
@@ -520,6 +521,7 @@ HTML_PAGE = """\
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230077cc'/><path d='M16 21h32M16 32h24M16 43h17' fill='none' stroke='white' stroke-width='5' stroke-linecap='round'/></svg>">
   <title>WAF Search — Strands + Elastic MCP</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -622,17 +624,21 @@ HTML_PAGE = """\
       .layout { grid-template-columns: 1fr; }
       header { display: block; }
     }
+""" + WEBUI_THEME_CSS + """
   </style>
 </head>
-<body>
-<main>
-  <header>
-    <h1>WAF Search</h1>
-    <div class="subtitle">Strands Agents on AWS Bedrock + Elastic Agent Builder MCP</div>
+<body class="webui-shell">
+<main class="ui-shell">
+  <header class="ui-header">
+    <div>
+      <p class="ui-eyebrow">Investigation desk / Elastic MCP</p>
+      <h1>WAF search</h1>
+      <div class="subtitle ui-subtitle">Search attack patterns, reconstruct timelines, and turn evidence into response actions with Strands on Bedrock.</div>
+    </div>
   </header>
 
   <div class="layout">
-    <section class="panel">
+    <section class="panel ui-panel">
       <div class="field">
         <label for="question">Question</label>
         <textarea id="question" placeholder="Find attack patterns and build a timeline for the last 24 hours."></textarea>
@@ -664,7 +670,7 @@ HTML_PAGE = """\
       <div class="stage-list" id="stages"></div>
     </section>
 
-    <section>
+    <section class="ui-panel">
       <div class="result-head">
         <div class="result-title">Conversation</div>
         <div class="result-tools">
@@ -682,6 +688,7 @@ HTML_PAGE = """\
 
 <script>
 """ + MARKDOWN_RENDERER_JS + """
+""" + WEBUI_INTERACTIONS_JS + """
 const question = document.getElementById("question");
 const files = document.getElementById("files");
 const urls = document.getElementById("urls");
@@ -761,20 +768,9 @@ function breakAssistantBubble() {
 }
 
 async function streamResponse(resp) {
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let assistantText = "";
   let failed = false;
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\\n\\n");
-    buffer = parts.pop();
-    for (const part of parts) {
-      if (!part.startsWith("data: ")) continue;
-      const evt = JSON.parse(part.slice(6));
+  for await (const evt of WebUI.events(resp)) {
       if (evt.type === "stage") {
         setStage(evt.stage, evt.text, evt.stage === "done" ? "done" : "active");
       } else if (evt.type === "tools") {
@@ -798,14 +794,11 @@ async function streamResponse(resp) {
       } else if (evt.type === "done") {
         setStage("done", "Done", "done");
       }
-    }
   }
   return { assistantText, failed };
 }
 
-for (const chip of document.querySelectorAll(".chip")) {
-  chip.addEventListener("click", () => { question.value = chip.textContent; question.focus(); });
-}
+WebUI.bindPromptChips(question);
 
 showActivity.addEventListener("change", syncActivityVisibility);
 

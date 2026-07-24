@@ -75,6 +75,18 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 uv sync
 ```
 
+For contributors, install the development checks and run the complete no-AWS
+validation suite:
+
+```bash
+uv sync --group dev
+uv run python scripts/check_examples.py
+```
+
+The suite compiles all Python examples, exercises shared helpers with `pytest`,
+checks repository conventions and the shared WebUI Markdown, interaction, and theme assets,
+and runs Ruff. GitHub Actions runs the same command on pushes and pull requests.
+
 ### Unstructured system dependencies
 
 Files `13`-`15`, `24`-`26`, and `29` use Unstructured for PDF extraction and document
@@ -210,9 +222,22 @@ The mantle endpoint uses two different base paths depending on the model:
 - `examples/agents/30_strands_remote_mcp_teaching_agent.py` runs a documentation-grounded teaching agent for learning how to do tasks across AWS, Cloudflare, Microsoft, and Google Cloud platforms. It connects to AWS Knowledge MCP (`https://knowledge-mcp.global.api.aws`), Cloudflare Docs MCP (`https://docs.mcp.cloudflare.com/mcp`), and Microsoft Learn MCP (`https://learn.microsoft.com/api/mcp`) by default, then automatically adds Google Developer Knowledge MCP (`https://developerknowledge.googleapis.com/mcp`) when `GCP_DK_MCP_API_KEY` is set. Google uses Strands' built-in `MCPClient` over Streamable HTTP with `X-Goog-Api-Key` supplied from that environment variable; its `gcp_*` tool wrappers open a fresh Google MCP session per call so long multi-provider turns do not reuse a closed idle session. The agent uses the relevant documentation tools before giving platform-specific steps, tradeoffs, common mistakes, verification checks, and a short knowledge check. Strands ContextOffloader is enabled by default so large remote documentation tool responses are stored out of context with a bounded preview; use `--no-context-offload`, `--offload-threshold`, and `--offload-preview` to tune it. The default output budget is `8192` tokens; use `BEDROCK_MAX_TOKENS` or `--max-tokens` with larger-output models when lessons need more room. Use `--interactive` to keep the same CLI session open for follow-up questions, `--web` to run the browser chat UI on `http://127.0.0.1:8004`, `--source` to focus on one or more providers, and `--allow-partial` when one remote docs MCP server is unavailable. CLI mode streams answer tokens as they arrive and prints compact tool-call markers instead of waiting for the whole agent run to finish. The WebUI hides tool calls by default behind a **Show tool calls** toggle, separates assistant output around tool/stage boundaries, sends a bounded recent transcript for follow-up context, and opens fresh MCP client sessions for each chat turn so remote docs connections cannot go stale between requests. CLI modes exit cleanly on `quit`, `exit`, or Ctrl-C.
 - `examples/agents/31_bedrock_embeddings_local_rag.py` demonstrates local RAG without a vector database. It reads Markdown or text files, splits them into bounded chunks, embeds each chunk and the question with Amazon Titan Text Embeddings V2 (`amazon.titan-embed-text-v2:0`) through `InvokeModel`, ranks chunks in memory with cosine similarity, and asks a Bedrock Runtime Converse model to answer with bracketed source IDs. Use `--dry-run` to check file loading/chunking without calling Bedrock.
 
-## WebUI Markdown rendering
+## Shared WebUI assets
 
-The browser examples `12`, `13`, `26`, `29`, and `30` inject the shared renderer from `webui_markdown.py` so streamed model output renders consistently across all WebUIs. The renderer is dependency-free browser JavaScript and covers common model response shapes: headings, paragraphs, inline code, emphasis, strikethrough, links/autolinks, blockquotes, ordered/unordered/task lists, pipe tables, fenced code, partial streaming chunks, and HTML escaping.
+The browser examples `12`, `13`, `26`, `29`, and `30` share three dependency-free
+browser assets:
+
+- `webui_markdown.py` renders streamed model output, including headings, lists,
+  tables, fenced code, partial chunks, and escaped HTML.
+- `webui_interactions.py` provides SSE decoding, message updates, prompt chips,
+  composer shortcuts, busy state, and accessible status handling.
+- `webui_theme.py` provides the visual system derived from the
+  human-in-the-loop example, including responsive panels, readable prompt
+  bubbles, focus indicators, and higher-contrast text.
+
+Page-specific layouts and event semantics remain in their examples. The shared
+theme intentionally uses dark text on light prompt bubbles and WCAG AA contrast
+for normal visible text.
 
 Run the local no-AWS validation script after changing shared helpers or examples:
 
@@ -220,11 +245,12 @@ Run the local no-AWS validation script after changing shared helpers or examples
 uv run python scripts/check_examples.py
 ```
 
-Run the narrower renderer check after changing only `webui_markdown.py` or WebUI
-HTML/CSS that displays model Markdown:
+Run the narrower checks when changing one of the shared browser assets:
 
 ```bash
 node scripts/check_webui_markdown.js
+node scripts/check_webui_interactions.js
+node scripts/check_webui_theme.js
 ```
 
 ## Run examples

@@ -5,10 +5,13 @@ Uses Unstructured's open-source partition_pdf first, with pypdf as a lightweight
 fallback for environments missing optional OCR/layout dependencies.
 """
 import io
+import logging
 from pathlib import Path
 from typing import Any
 
 import pypdf
+
+logger = logging.getLogger(__name__)
 
 
 def _elements_to_text(elements) -> str:
@@ -39,9 +42,9 @@ def extract_pdf_text_from_bytes(pdf_bytes: bytes) -> str:
         text = _elements_to_text(elements)
         if text:
             return text
-    except Exception:
+    except Exception as exc:
         # Keep examples runnable even when optional OCR/layout dependencies are absent.
-        pass
+        logger.debug("Unstructured PDF extraction failed; using pypdf fallback: %s", exc)
 
     return _pypdf_text_from_bytes(pdf_bytes)
 
@@ -54,7 +57,11 @@ def extract_pdf_text_from_path(path: str | Path) -> str:
         text = _elements_to_text(elements)
         if text:
             return text
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "Unstructured PDF extraction failed for %s; using pypdf fallback: %s",
+            pdf_path,
+            exc,
+        )
 
     return _pypdf_text_from_bytes(pdf_path.read_bytes())

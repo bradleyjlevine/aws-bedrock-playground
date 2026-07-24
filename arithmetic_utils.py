@@ -27,7 +27,11 @@ def evaluate_arithmetic_expression(expression: str) -> int | float:
 
 
 def _evaluate_node(node: ast.AST) -> int | float:
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, (int, float))
+        and not isinstance(node.value, bool)
+    ):
         return node.value
     if isinstance(node, ast.BinOp):
         operator_fn = _BINARY_OPERATORS.get(type(node.op))

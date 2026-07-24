@@ -28,6 +28,7 @@ import os
 import shlex
 import subprocess
 import textwrap
+import uuid
 
 import boto3
 from strands import Agent, tool
@@ -54,31 +55,34 @@ def _container_running() -> bool:
 
 async def _run_in_sandbox(source: str) -> str:
     sandbox = DockerSandbox(CONTAINER, working_dir="/tmp")
-    path = "/tmp/suspicious.py"
-    await sandbox.write_text(path, source)
-    compile_result = await sandbox.execute("python -m py_compile " + shlex.quote(path))
-    ast_result = await sandbox.execute(
-        "python - <<'PY'\n"
-        "import ast, pathlib\n"
-        f"tree = ast.parse(pathlib.Path({path!r}).read_text())\n"
-        "calls = []\n"
-        "imports = []\n"
-        "for node in ast.walk(tree):\n"
-        "    if isinstance(node, ast.Import):\n"
-        "        imports.extend(alias.name for alias in node.names)\n"
-        "    elif isinstance(node, ast.ImportFrom):\n"
-        "        imports.append(node.module or '')\n"
-        "    elif isinstance(node, ast.Call):\n"
-        "        name = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)\n"
-        "        if name:\n"
-        "            calls.append(name)\n"
-        "print({'imports': sorted(set(imports)), 'calls': sorted(set(calls))})\n"
-        "PY"
-    )
-    return (
-        f"py_compile exit={compile_result.exit_code}\n{compile_result.stderr}\n"
-        f"ast inventory exit={ast_result.exit_code}\n{ast_result.stdout}{ast_result.stderr}"
-    )
+    path = f"/tmp/strands-triage-{uuid.uuid4().hex}.py"
+    try:
+        await sandbox.write_text(path, source)
+        compile_result = await sandbox.execute("python -m py_compile " + shlex.quote(path))
+        ast_result = await sandbox.execute(
+            "python - <<'PY'\n"
+            "import ast, pathlib\n"
+            f"tree = ast.parse(pathlib.Path({path!r}).read_text())\n"
+            "calls = []\n"
+            "imports = []\n"
+            "for node in ast.walk(tree):\n"
+            "    if isinstance(node, ast.Import):\n"
+            "        imports.extend(alias.name for alias in node.names)\n"
+            "    elif isinstance(node, ast.ImportFrom):\n"
+            "        imports.append(node.module or '')\n"
+            "    elif isinstance(node, ast.Call):\n"
+            "        name = getattr(node.func, 'id', None) or getattr(node.func, 'attr', None)\n"
+            "        if name:\n"
+            "            calls.append(name)\n"
+            "print({'imports': sorted(set(imports)), 'calls': sorted(set(calls))})\n"
+            "PY"
+        )
+        return (
+            f"py_compile exit={compile_result.exit_code}\n{compile_result.stderr}\n"
+            f"ast inventory exit={ast_result.exit_code}\n{ast_result.stdout}{ast_result.stderr}"
+        )
+    finally:
+        await sandbox.execute("rm -f " + shlex.quote(path))
 
 
 @tool

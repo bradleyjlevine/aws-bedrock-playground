@@ -14,6 +14,8 @@ uv run python examples/<group>/<file>.py        # run a script
 AWS_PROFILE=<profile> uv run python examples/<group>/<file>.py  # run with a specific SSO profile
 uv run python scripts/check_examples.py         # local no-AWS validation
 node scripts/check_webui_markdown.js            # validate shared WebUI Markdown rendering
+node scripts/check_webui_interactions.js        # validate shared SSE/UI interactions
+node scripts/check_webui_theme.js               # validate shared theme contracts
 ```
 
 ## Project structure
@@ -22,8 +24,12 @@ node scripts/check_webui_markdown.js            # validate shared WebUI Markdown
 auth.py                        # shared auth helper — DO NOT modify without reading the note below
 arithmetic_utils.py            # safe arithmetic expression evaluator for calculator tools
 webui_markdown.py              # shared browser-side Markdown renderer for WebUI examples
+webui_interactions.py          # shared SSE, composer, prompt-chip, status, and chat DOM helpers
+webui_theme.py                 # shared HITL-derived visual system for WebUI examples
 scripts/check_examples.py      # local no-AWS validation script
 scripts/check_webui_markdown.js # Node QA script for WebUI Markdown rendering
+scripts/check_webui_interactions.js # Node QA script for shared browser interactions
+scripts/check_webui_theme.js   # Node QA script for shared WebUI theme tokens/selectors
 examples/core/                 # Bedrock Runtime basics and guardrails
 examples/mantle/               # bedrock-mantle examples and Strands mantle adapters
 examples/agents/               # Strands agent, tool, MCP, swarm, workflow, and HITL examples
@@ -126,8 +132,11 @@ aws sso login --profile <profile-name>
 
 ### Local validation
 Run `uv run python scripts/check_examples.py` after shared helper changes. It
-compiles repository Python source, checks the safe arithmetic evaluator, and runs
-the shared WebUI Markdown renderer QA. It intentionally avoids AWS calls.
+compiles repository Python source, runs the shared helper tests and Ruff, checks
+repository/documentation conventions, and runs the shared WebUI Markdown,
+interaction, and theme QA. Install the development dependencies first with
+`uv sync --group dev`. The suite intentionally avoids AWS calls and is also run
+by GitHub Actions.
 
 ### PDF extraction fallback
 `pdf_utils.py` imports Unstructured lazily inside extraction calls so examples can
@@ -218,8 +227,10 @@ Any callable `(**kwargs)` works as `callback_handler=`. Key kwargs:
 ### WebUI streaming (file 12)
 For browser/server scenarios, set `callback_handler=None` and consume `agent.stream_async(prompt)` directly — each yielded event has the same `data` / `event` shape, but you control where the bytes go. File 12 wraps each event into a JSON SSE frame (`data: {...}\n\n`) so the browser can render tokens incrementally with `fetch().body.getReader()`.
 
-### WebUI Markdown rendering (files 12, 13, 26, 29, 30)
-The browser UIs share `webui_markdown.py` for dependency-free client-side Markdown rendering. Do not paste or fork `renderMarkdown()` inside individual HTML strings; import `MARKDOWN_RENDERER_JS` and inject it into the page. When changing Markdown behavior or presentation, update the shared renderer and run `node scripts/check_webui_markdown.js`.
+### WebUI browser assets (files 12, 13, 26, 29, 30)
+The browser UIs share `webui_markdown.py` for dependency-free client-side Markdown rendering, `webui_interactions.py` for SSE decoding, message/Markdown updates, composer shortcuts, prompt chips, busy state, and accessible status handling, and `webui_theme.py` for the HITL-derived visual system. Do not paste or fork `renderMarkdown()` or SSE frame parsing inside individual HTML strings; import and inject `MARKDOWN_RENDERER_JS`, `WEBUI_INTERACTIONS_JS`, and `WEBUI_THEME_CSS`. Keep page-specific layouts, approval flows, stages, transcripts, and event semantics in their examples.
+
+Preserve readable text contrast when adding page-specific CSS. Normal visible text should meet WCAG AA contrast, prompt chips should keep dark text on a light background, and generic button rules must not override the shared `.webui-shell button.chip` states. Check long labels at desktop and mobile widths for wrapping and horizontal overflow. When changing these assets, run the three `node scripts/check_webui_*.js` QA scripts, exercise the affected pages with Playwright, or run the complete `uv run python scripts/check_examples.py` suite.
 
 The QA script covers representative streamed model output: headings, paragraphs, inline code, emphasis, strikethrough, links/autolinks, blockquotes, ordered/unordered/task lists, strict and loose tables, escaped table pipes, fenced code blocks, partial streaming chunks, and HTML/script escaping.
 

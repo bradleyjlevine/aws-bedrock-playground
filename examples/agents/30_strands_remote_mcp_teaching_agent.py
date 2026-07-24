@@ -23,7 +23,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging, install_http_request_logging_middleware
+from webui_interactions import WEBUI_INTERACTIONS_JS
 from webui_markdown import MARKDOWN_RENDERER_JS
+from webui_theme import WEBUI_THEME_CSS
 
 import argparse
 import asyncio
@@ -674,6 +676,7 @@ HTML_PAGE = """\
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%232457a6'/><path d='M17 20h30v25H17zM23 27h18M23 34h14' fill='none' stroke='white' stroke-width='4' stroke-linejoin='round' stroke-linecap='round'/></svg>">
   <title>Tech Teaching Agent</title>
   <style>
     :root {
@@ -867,12 +870,17 @@ HTML_PAGE = """\
       form { grid-template-columns: 1fr; }
       button { width: 100%; }
     }
+""" + WEBUI_THEME_CSS + """
   </style>
 </head>
-<body>
-<main>
-  <header>
-    <h1>Tech Teaching Agent</h1>
+<body class="webui-shell">
+<main class="ui-shell">
+  <header class="ui-header">
+    <div>
+      <p class="ui-eyebrow">Learning studio / Connected documentation</p>
+      <h1>Tech teaching agent</h1>
+      <p class="ui-subtitle">Build a grounded lesson from live AWS, Cloudflare, Microsoft, and Google Cloud documentation.</p>
+    </div>
     <div class="header-tools">
       <div class="meta">AWS · Cloudflare · Microsoft · Google Cloud</div>
       <label class="activity-toggle" for="show-tools">
@@ -882,23 +890,24 @@ HTML_PAGE = """\
     </div>
   </header>
 
-  <section id="log" class="hide-tools" aria-live="polite"></section>
+  <section id="log" class="hide-tools ui-panel" aria-live="polite"></section>
 
-  <section>
+  <section class="ui-composer">
     <form id="form">
       <textarea id="input" autocomplete="off" placeholder="Ask how to build, deploy, secure, observe, or troubleshoot something."></textarea>
       <button id="send" type="submit">Send</button>
     </form>
     <div class="chips">
-      <span class="chip" data-prompt="Teach me how to deploy a static site across AWS, Cloudflare, Microsoft, and Google Cloud.">Static site</span>
-      <span class="chip" data-prompt="Teach me how to put a serverless API behind authentication across the connected platforms.">API auth</span>
-      <span class="chip" data-prompt="Teach me how to observe and troubleshoot a small web application after deployment.">Observability</span>
+      <button class="chip" type="button" data-prompt="Teach me how to deploy a static site across AWS, Cloudflare, Microsoft, and Google Cloud.">Static site</button>
+      <button class="chip" type="button" data-prompt="Teach me how to put a serverless API behind authentication across the connected platforms.">API auth</button>
+      <button class="chip" type="button" data-prompt="Teach me how to observe and troubleshoot a small web application after deployment.">Observability</button>
     </div>
   </section>
 </main>
 
 <script>
 """ + MARKDOWN_RENDERER_JS + """
+""" + WEBUI_INTERACTIONS_JS + """
 const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
@@ -908,24 +917,14 @@ const transcript = [];
 const maxTranscriptMessages = 12;
 
 function add(cls, text) {
-  const div = document.createElement("div");
-  div.className = cls;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
+  return WebUI.addMessage(log, cls, text);
 }
 
 function append(target, text) {
-  target.dataset.markdown = (target.dataset.markdown || "") + text;
-  target.innerHTML = renderMarkdown(target.dataset.markdown);
-  log.scrollTop = log.scrollHeight;
+  WebUI.appendMarkdown(log, target, text);
 }
 
 async function streamSSE(response) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let assistant = null;
   const assistantParts = [];
 
@@ -943,17 +942,7 @@ async function streamSSE(response) {
     }
   }
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\\n\\n");
-    buffer = frames.pop();
-
-    for (const frame of frames) {
-      const line = frame.split("\\n").find((part) => part.startsWith("data: "));
-      if (!line) continue;
-      const evt = JSON.parse(line.slice(6));
+  for await (const evt of WebUI.events(response)) {
       if (evt.type === "token") {
         append(currentAssistant(), evt.text);
       } else if (evt.type === "tool") {
@@ -966,7 +955,6 @@ async function streamSSE(response) {
         closeAssistantPart();
         add("error", evt.text);
       }
-    }
   }
 
   return assistantParts
@@ -1004,20 +992,11 @@ async function ask(message) {
   }
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = "";
+WebUI.bindComposer(form, input, async (message) => {
   await ask(message);
 });
 
-document.querySelectorAll(".chip").forEach((chip) => {
-  chip.addEventListener("click", () => {
-    input.value = chip.dataset.prompt;
-    input.focus();
-  });
-});
+WebUI.bindPromptChips(input);
 
 showTools.addEventListener("change", () => {
   log.classList.toggle("hide-tools", !showTools.checked);

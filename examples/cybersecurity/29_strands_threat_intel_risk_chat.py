@@ -18,6 +18,8 @@ The tools use public sources where practical:
   - Cached PDF-to-markdown references for Security Cards and Unified Kill Chain
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import sys
 
@@ -52,7 +54,9 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 
 from cyber_vuln_utils import lookup_cve_record, lookup_euvd_record
+from webui_interactions import WEBUI_INTERACTIONS_JS
 from webui_markdown import MARKDOWN_RENDERER_JS
+from webui_theme import WEBUI_THEME_CSS
 
 REGION = "us-east-1"
 MODEL_ID = os.environ.get(
@@ -1941,6 +1945,7 @@ HTML_PAGE = """\
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%232457a6'/><circle cx='29' cy='29' r='12' fill='none' stroke='white' stroke-width='5'/><path d='M38 38l10 10' stroke='white' stroke-width='5' stroke-linecap='round'/></svg>">
   <title>Threat Intel Risk Chat</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -2115,68 +2120,52 @@ HTML_PAGE = """\
       form { grid-template-columns: 1fr; }
       button { width: 100%; }
     }
+""" + WEBUI_THEME_CSS + """
   </style>
 </head>
-<body>
-<main>
-  <header>
-    <h1>Threat Intel Risk Chat</h1>
-    <div class="meta">CVE/EUVD · CWE/CAPEC · ATT&CK/ATLAS · OWASP · FAIR/ROSI</div>
+<body class="webui-shell">
+<main class="ui-shell">
+  <header class="ui-header">
+    <div>
+      <p class="ui-eyebrow">Analyst workspace / Threat + risk</p>
+      <h1>Threat intel risk chat</h1>
+      <div class="meta ui-subtitle">CVE/EUVD · CWE/CAPEC · ATT&CK/ATLAS · OWASP · FAIR/ROSI</div>
+    </div>
   </header>
 
-  <section id="log" aria-live="polite"></section>
+  <section id="log" class="ui-panel" aria-live="polite"></section>
 
-  <section>
+  <section class="ui-composer">
     <form id="form">
       <textarea id="input" autocomplete="off" placeholder="Ask about CVEs, ATT&CK/CWE mappings, threat models, ALE, or ROSI."></textarea>
       <button id="send" type="submit">Send</button>
     </form>
     <div class="chips">
-      <span class="chip" data-prompt="Tell me about CVE-2021-44228, CVE-2025-55182, CVE-2022-22965; what are they and how are they similar. How do they map to ATT&CK and CWE?">Compare CVEs</span>
-      <span class="chip" data-prompt="Map a public-facing Java RCE exposure to STRIDE, Unified Kill Chain, Security Cards, and OWASP Top 10 2025.">Threat model</span>
-      <span class="chip" data-prompt="Run FAIR Monte Carlo ALE and ROSI for a $120k control that reduces ALE from $500k to $180k.">FAIR + ROSI</span>
+      <button class="chip" type="button" data-prompt="Tell me about CVE-2021-44228, CVE-2025-55182, CVE-2022-22965; what are they and how are they similar. How do they map to ATT&CK and CWE?">Compare CVEs</button>
+      <button class="chip" type="button" data-prompt="Map a public-facing Java RCE exposure to STRIDE, Unified Kill Chain, Security Cards, and OWASP Top 10 2025.">Threat model</button>
+      <button class="chip" type="button" data-prompt="Run FAIR Monte Carlo ALE and ROSI for a $120k control that reduces ALE from $500k to $180k.">FAIR + ROSI</button>
     </div>
   </section>
 </main>
 
 <script>
 """ + MARKDOWN_RENDERER_JS + """
+""" + WEBUI_INTERACTIONS_JS + """
 const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
 
 function add(cls, text) {
-  const div = document.createElement("div");
-  div.className = cls;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
+  return WebUI.addMessage(log, cls, text);
 }
 
 function append(target, text) {
-  target.dataset.markdown = (target.dataset.markdown || "") + text;
-  target.innerHTML = renderMarkdown(target.dataset.markdown);
-  log.scrollTop = log.scrollHeight;
+  WebUI.appendMarkdown(log, target, text);
 }
 
 async function streamSSE(response, assistant) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\\n\\n");
-    buffer = frames.pop();
-
-    for (const frame of frames) {
-      const line = frame.split("\\n").find((part) => part.startsWith("data: "));
-      if (!line) continue;
-      const evt = JSON.parse(line.slice(6));
+  for await (const evt of WebUI.events(response)) {
       if (evt.type === "token") {
         append(assistant, evt.text);
       } else if (evt.type === "tool") {
@@ -2186,7 +2175,6 @@ async function streamSSE(response, assistant) {
       } else if (evt.type === "error") {
         add("error", evt.text);
       }
-    }
   }
 }
 
@@ -2214,26 +2202,11 @@ async function ask(message) {
   }
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = "";
+WebUI.bindComposer(form, input, async (message) => {
   await ask(message);
 });
 
-input.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-    form.requestSubmit();
-  }
-});
-
-document.querySelectorAll(".chip").forEach((chip) => {
-  chip.addEventListener("click", () => {
-    input.value = chip.dataset.prompt;
-    input.focus();
-  });
-});
+WebUI.bindPromptChips(input);
 </script>
 </body>
 </html>

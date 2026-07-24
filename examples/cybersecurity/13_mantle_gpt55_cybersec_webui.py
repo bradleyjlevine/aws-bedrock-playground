@@ -45,7 +45,9 @@ from openai import AsyncBedrockOpenAI
 from auth import get_mantle_token
 from cyber_source_utils import fetch_url_markdown
 from pdf_utils import extract_pdf_text_from_bytes
+from webui_interactions import WEBUI_INTERACTIONS_JS
 from webui_markdown import MARKDOWN_RENDERER_JS
+from webui_theme import WEBUI_THEME_CSS
 
 REGION = "us-east-2"  # GPT-5.5 / GPT-5.4 both available in us-east-2 (Ohio)
 PRIMARY_MODEL = "openai.gpt-5.5"
@@ -308,6 +310,8 @@ HTML_PAGE = """\
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230066cc'/><path d='M18 43h28M22 35l7-8 7 5 8-12' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <title>Cyber-Security Summary — GPT-5.5 / 5.4 on Bedrock</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
@@ -408,13 +412,20 @@ HTML_PAGE = """\
       .actions, .result-header { align-items: stretch; flex-direction: column; }
       button { width: 100%; }
     }
+""" + WEBUI_THEME_CSS + """
   </style>
 </head>
-<body>
-  <h1>Cyber-Security Landscape Summariser</h1>
-  <p class="subtitle">Powered by GPT-5.5 (with GPT-5.4 fallback) on AWS Bedrock Mantle</p>
+<body class="webui-shell">
+<main class="ui-shell">
+  <header class="ui-header">
+    <div>
+      <p class="ui-eyebrow">Security analysis / Bedrock Mantle</p>
+      <h1>Cyber-security landscape summariser</h1>
+      <p class="subtitle ui-subtitle">Turn PDFs and public reports into a structured security briefing with GPT-5.5 and GPT-5.4 fallback.</p>
+    </div>
+  </header>
 
-  <div class="card">
+  <div class="card ui-panel">
     <div class="input-grid">
       <div>
         <label for="file-input">Upload PDFs</label>
@@ -433,16 +444,18 @@ HTML_PAGE = """\
     </div>
   </div>
 
-  <div class="card result-card">
+  <div class="card result-card ui-panel">
     <div class="result-header">
       <div class="result-title">Analysis</div>
       <div id="source-meta"></div>
     </div>
     <div id="output"></div>
   </div>
+</main>
 
 <script>
 """ + MARKDOWN_RENDERER_JS + """
+""" + WEBUI_INTERACTIONS_JS + """
 const fileInput    = document.getElementById("file-input");
 const urlInput     = document.getElementById("url-input");
 const analyseBtn   = document.getElementById("analyse-btn");
@@ -457,7 +470,7 @@ function setEnabled(v)  { analyseBtn.disabled = !v; }
 
 function setMarkdown(markdown) {
   markdownBuffer = markdown;
-  output.innerHTML = renderMarkdown(markdownBuffer);
+  WebUI.renderMarkdown(null, output, markdownBuffer);
 }
 
 function setSourceMeta(files, urls) {
@@ -525,34 +538,10 @@ analyseBtn.addEventListener("click", async () => {
       return;
     }
 
-    const reader  = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let sawOutput = false;
     let sawError = false;
 
-    while (true) {
-      let chunk;
-      try {
-        chunk = await reader.read();
-      } catch (err) {
-        setStatus("Response stream interrupted: " + err.message);
-        return;
-      }
-      const { value, done } = chunk;
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\\n\\n");
-      buffer = parts.pop();
-      for (const part of parts) {
-        if (!part.startsWith("data: ")) continue;
-        let evt;
-        try {
-          evt = JSON.parse(part.slice(6));
-        } catch (err) {
-          setStatus("Could not parse server event: " + err.message);
-          continue;
-        }
+    for await (const evt of WebUI.events(resp)) {
         if (evt.type === "token") {
           setMarkdown(markdownBuffer + evt.text);
           if ((evt.text || "").trim()) sawOutput = true;
@@ -568,7 +557,6 @@ analyseBtn.addEventListener("click", async () => {
             setStatus("Done, but the model returned no visible output. Check logs/13_mantle_gpt55_cybersec_webui.log.");
           }
         }
-      }
     }
   } catch (err) {
     setStatus("Browser error: " + err.message);

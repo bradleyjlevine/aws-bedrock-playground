@@ -39,7 +39,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from logging_utils import configure_script_logging, install_http_request_logging_middleware
+from webui_interactions import WEBUI_INTERACTIONS_JS
 from webui_markdown import MARKDOWN_RENDERER_JS
+from webui_theme import WEBUI_THEME_CSS
 
 LOGGER = configure_script_logging(__file__)
 import json
@@ -190,16 +192,120 @@ HTML_PAGE = """\
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230b4d66'/><path d='M20 33l8 8 17-19' fill='none' stroke='white' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <title>Strands Bedrock Chat (HITL)</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-           max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1d1d1f; }
-    h1 { font-size: 1.4rem; }
-    #log { border: 1px solid #d2d2d7; border-radius: 8px; padding: 1rem;
-           height: 60vh; overflow-y: auto; background: #fafafa; }
-    .msg { margin: 0.6rem 0; white-space: pre-wrap; line-height: 1.4; }
-    .user { color: #0066cc; }
-    .assistant { color: #1d1d1f; white-space: normal; }
+    :root {
+      color-scheme: light;
+      --ink: #16233a;
+      --muted: #657089;
+      --line: #dbe2ee;
+      --paper: #ffffff;
+      --canvas: #eef3f8;
+      --accent: #176b87;
+      --accent-deep: #0b4d66;
+      --approval: #fff7df;
+      --approval-line: #e6b84a;
+      --danger: #b43a45;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(23, 107, 135, 0.035) 1px, transparent 1px),
+        linear-gradient(rgba(23, 107, 135, 0.035) 1px, transparent 1px),
+        var(--canvas);
+      background-size: 24px 24px;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(920px, calc(100vw - 32px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 24px 0;
+      display: grid;
+      grid-template-rows: auto minmax(320px, 1fr) auto;
+      gap: 14px;
+    }
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--accent);
+      font: 700 0.72rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; font-size: clamp(1.45rem, 3vw, 2.15rem); letter-spacing: -0.035em; }
+    .lede { max-width: 630px; margin: 7px 0 0; color: var(--muted); line-height: 1.5; }
+    .status {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 10px;
+      border: 1px solid #b9d7df;
+      border-radius: 999px;
+      background: #f4fcfd;
+      color: var(--accent-deep);
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+    .status::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #20a46b;
+      box-shadow: 0 0 0 3px rgba(32, 164, 107, 0.13);
+    }
+    #log {
+      min-height: 0;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.94);
+      box-shadow: 0 18px 50px rgba(35, 53, 83, 0.08);
+    }
+    .empty {
+      height: 100%;
+      min-height: 260px;
+      display: grid;
+      place-content: center;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty strong { color: var(--ink); font-size: 1.05rem; }
+    .empty p { max-width: 440px; margin: 7px auto 0; line-height: 1.5; }
+    .msg {
+      max-width: 86%;
+      margin: 0 0 12px;
+      padding: 11px 13px;
+      border-radius: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.45;
+    }
+    .user {
+      margin-left: auto;
+      background: #e6f3f7;
+      border: 1px solid #c2e0e8;
+      color: #123f50;
+    }
+    .assistant {
+      background: #f7f9fc;
+      border: 1px solid #e2e7f0;
+      color: var(--ink);
+      white-space: normal;
+    }
     .assistant h1, .assistant h2, .assistant h3, .assistant h4, .assistant h5, .assistant h6 {
       margin: 0.35rem 0 0.25rem; line-height: 1.25; font-size: 1rem;
     }
@@ -237,73 +343,180 @@ HTML_PAGE = """\
     .assistant del { color: #64748b; }
     .assistant input[type="checkbox"] { margin-right: 0.35rem; vertical-align: -0.1rem; }
     .assistant a { color: #0066cc; }
-    .tool { color: #8e8e93; font-style: italic; font-size: 0.85rem; }
-    .approval { background: #fff4d6; border: 1px solid #f0c040; border-radius: 8px;
-                padding: 0.75rem 1rem; margin: 0.6rem 0; }
-    .approval pre { background: #fff; padding: 0.5rem; border-radius: 4px;
-                    overflow-x: auto; font-size: 0.85rem; margin: 0.4rem 0; }
+    .activity {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .activity summary { width: fit-content; cursor: pointer; font-weight: 650; }
+    .tool { margin: 6px 0 0 12px; color: var(--muted); font-family: ui-monospace, monospace; }
+    .error {
+      max-width: 100%;
+      color: #8e2630;
+      background: #fff0f1;
+      border: 1px solid #f1c5ca;
+    }
+    .approval {
+      max-width: 100%;
+      background: var(--approval);
+      border: 1px solid var(--approval-line);
+      border-radius: 14px;
+      padding: 16px;
+      margin: 0 0 14px;
+      box-shadow: 0 8px 24px rgba(126, 88, 13, 0.09);
+    }
+    .approval-title { display: flex; justify-content: space-between; gap: 10px; }
+    .approval-label {
+      color: #77520a;
+      font: 700 0.7rem/1.2 ui-monospace, monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .approval pre {
+      background: rgba(255,255,255,0.74);
+      border: 1px solid rgba(198, 151, 50, 0.28);
+      padding: 11px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.85rem;
+      margin: 10px 0;
+    }
     .approval-buttons { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
     .approval-buttons button { padding: 0.4rem 1rem; border: 0; border-radius: 6px;
                                cursor: pointer; font: inherit; }
-    .btn-approve { background: #34c759; color: #fff; }
-    .btn-deny    { background: #ff3b30; color: #fff; }
-    #form { display: flex; gap: 0.5rem; margin-top: 1rem; }
-    #input { flex: 1; padding: 0.6rem; border: 1px solid #d2d2d7;
-             border-radius: 6px; font: inherit; }
-    button { padding: 0.6rem 1.2rem; border: 0; border-radius: 6px;
-             background: #0066cc; color: #fff; font: inherit; cursor: pointer; }
-    button:disabled { background: #aaa; cursor: not-allowed; }
+    .btn-approve { background: var(--accent-deep); color: #fff; }
+    .btn-deny { background: transparent; border: 1px solid #d18b91 !important; color: var(--danger); }
+    .composer {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--paper);
+      box-shadow: 0 10px 32px rgba(35, 53, 83, 0.07);
+    }
+    #form { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: end; }
+    #input {
+      width: 100%;
+      min-height: 54px;
+      max-height: 150px;
+      resize: vertical;
+      padding: 10px 12px;
+      border: 1px solid #c9d3e2;
+      border-radius: 9px;
+      color: var(--ink);
+      background: #fbfcfe;
+      font: inherit;
+      line-height: 1.4;
+    }
+    button {
+      min-height: 42px;
+      padding: 0.65rem 1.15rem;
+      border: 0;
+      border-radius: 9px;
+      background: var(--accent-deep);
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 120ms ease, background 120ms ease;
+    }
+    button:hover:not(:disabled) { transform: translateY(-1px); background: var(--accent); }
+    button:disabled { background: #9aa7b8; cursor: not-allowed; }
+    button:focus-visible, #input:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(23, 107, 135, 0.28);
+      outline-offset: 2px;
+    }
+    .hint { margin: 8px 2px 0; color: var(--muted); font-size: 0.76rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+    .chip {
+      min-height: 0;
+      padding: 5px 8px;
+      border: 1px solid #cbd6e4;
+      background: #f8fafc;
+      color: #40506a;
+      font-size: 0.76rem;
+      font-weight: 650;
+    }
+    @media (max-width: 680px) {
+      main { width: min(100vw - 20px, 920px); padding: 12px 0; }
+      header { display: block; }
+      .status { margin-top: 10px; }
+      #log { padding: 12px; }
+      .msg { max-width: 100%; }
+      #form { grid-template-columns: 1fr; }
+      #send { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+""" + WEBUI_THEME_CSS + """
   </style>
 </head>
-<body>
-  <h1>Strands Bedrock Chat — Human in the Loop</h1>
-  <p style="color:#6e6e73;">
-    Try: <em>"Email alex@example.com saying the deploy is done."</em>
-    or <em>"What time is it?"</em><br>
-    The agent will draft the email and ask you to approve or deny before sending.
-  </p>
-  <div id="log"></div>
-  <form id="form">
-    <input id="input" autocomplete="off" placeholder="Type a message..." autofocus>
-    <button id="send" type="submit">Send</button>
-  </form>
+<body class="webui-shell">
+<main class="ui-shell">
+  <header class="ui-header">
+    <div>
+      <p class="eyebrow">Approval desk / Bedrock + Strands</p>
+      <h1>Human-in-the-loop agent</h1>
+      <p class="lede">Delegate everyday work. Sensitive actions pause here for a clear human decision before anything is sent.</p>
+    </div>
+    <div class="status" id="status" role="status">Ready</div>
+  </header>
+  <section id="log" class="ui-panel" aria-live="polite" aria-label="Conversation">
+    <div class="empty" id="empty">
+      <div>
+        <strong>Start with a request</strong>
+        <p>Ask for the time, run a calculation, or draft an email. Email delivery always requires your approval.</p>
+      </div>
+    </div>
+  </section>
+  <section class="composer ui-composer" aria-label="Message composer">
+    <form id="form">
+      <textarea id="input" autocomplete="off" placeholder="What should the agent do?" aria-label="Message" autofocus></textarea>
+      <button id="send" type="submit">Send</button>
+    </form>
+    <div class="chips" aria-label="Example requests">
+      <button class="chip" type="button" data-prompt="What time is it in Tokyo?">Check a time</button>
+      <button class="chip" type="button" data-prompt="Calculate (42 + 18) * 3.">Run a calculation</button>
+      <button class="chip" type="button" data-prompt="Email alex@example.com saying the deploy is done.">Draft an email</button>
+    </div>
+    <p class="hint">Press ⌘ Enter or Ctrl Enter to send.</p>
+  </section>
+</main>
 
 <script>
 """ + MARKDOWN_RENDERER_JS + """
+""" + WEBUI_INTERACTIONS_JS + """
 const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
+const status = document.getElementById("status");
+const empty = document.getElementById("empty");
 
 function add(cls, text) {
-  const div = document.createElement("div");
-  div.className = "msg " + cls;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
+  empty?.remove();
+  return WebUI.addMessage(log, "msg " + cls, text);
 }
 
 function appendMarkdown(target, text) {
-  target.dataset.markdown = (target.dataset.markdown || "") + text;
-  target.innerHTML = renderMarkdown(target.dataset.markdown);
-  log.scrollTop = log.scrollHeight;
+  WebUI.appendMarkdown(log, target, text);
 }
 
 function addApprovalCard(interruptId, reason) {
+  empty?.remove();
   const card = document.createElement("div");
   card.className = "msg approval";
   const args = reason && reason.input ? reason.input : {};
   card.innerHTML =
-    "<strong>Approval required: send_email</strong>" +
+    '<div class="approval-title"><strong>Review email before sending</strong><span class="approval-label">Approval required</span></div>' +
     "<pre>" +
     "To:      " + escapeHTML(args.recipient || "") + "\\n" +
     "Subject: " + escapeHTML(args.subject   || "") + "\\n" +
     "Body:    " + escapeHTML(args.body      || "") +
     "</pre>" +
     '<div class="approval-buttons">' +
-    '<button class="btn-approve">Approve & Send</button>' +
-    '<button class="btn-deny">Deny</button>' +
+    '<button class="btn-approve">Approve and send</button>' +
+    '<button class="btn-deny">Do not send</button>' +
     "</div>";
   log.appendChild(card);
   log.scrollTop = log.scrollHeight;
@@ -322,25 +535,26 @@ function addApprovalCard(interruptId, reason) {
 }
 
 async function streamSSE(response, assistantBubble) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let pendingApproval = null;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\\n\\n");
-    buffer = lines.pop();
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const evt = JSON.parse(line.slice(6));
+  for await (const evt of WebUI.events(response)) {
       if (evt.type === "token") {
+        status.textContent = "Responding";
         appendMarkdown(assistantBubble, evt.text);
       } else if (evt.type === "tool") {
-        add("tool", "[tool: " + evt.name + "]");
+        let activity = log.querySelector(".activity:last-of-type");
+        if (!activity) {
+          activity = document.createElement("details");
+          activity.className = "activity";
+          activity.innerHTML = "<summary>Show tool activity</summary>";
+          log.appendChild(activity);
+        }
+        const item = document.createElement("div");
+        item.className = "tool";
+        item.textContent = evt.name;
+        activity.appendChild(item);
       } else if (evt.type === "approval_request") {
+        status.textContent = "Waiting for approval";
         pendingApproval = addApprovalCard(evt.interrupt_id, evt.reason);
         const approved = await pendingApproval;
         // Resume the agent and stream the continuation into the same bubble
@@ -353,20 +567,18 @@ async function streamSSE(response, assistantBubble) {
       } else if (evt.type === "done") {
         // handled by outer caller
       } else if (evt.type === "error") {
-        add("tool", "Error: " + evt.text);
+        const error = add("msg error", "Could not complete the request: " + evt.text);
+        error.setAttribute("role", "alert");
       }
-    }
   }
 }
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const message = input.value.trim();
-  if (!message) return;
-  input.value = "";
+WebUI.bindComposer(form, input, async (message) => {
   send.disabled = true;
-  add("user", "You: " + message);
-  const assistant = add("assistant", "Assistant: ");
+  input.disabled = true;
+  status.textContent = "Working";
+  add("msg user", message);
+  const assistant = add("msg assistant", "");
   try {
     const resp = await fetch("/chat", {
       method: "POST",
@@ -374,11 +586,18 @@ form.addEventListener("submit", async (e) => {
       body: JSON.stringify({ message })
     });
     await streamSSE(resp, assistant);
+  } catch (err) {
+    console.error("Chat request failed", err);
+    const error = add("msg error", "Connection failed. Check that the server is running, then try again.");
+    error.setAttribute("role", "alert");
   } finally {
     send.disabled = false;
+    input.disabled = false;
+    status.textContent = "Ready";
     input.focus();
   }
 });
+WebUI.bindPromptChips(input);
 </script>
 </body>
 </html>
