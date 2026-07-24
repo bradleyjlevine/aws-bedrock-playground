@@ -2,7 +2,19 @@ name: Validate examples
 
 on:
   pull_request:
+    paths:
+      - "**/*.py"
+      - "scripts/**/*.js"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/validate.yml"
   push:
+    paths:
+      - "**/*.py"
+      - "scripts/**/*.js"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/validate.yml"
 
 permissions:
   contents: read
