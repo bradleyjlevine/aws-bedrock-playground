@@ -134,7 +134,7 @@ function renderLooseTable(lines, start) {
 function normalizeMarkdown(markdown) {
   return String(markdown)
     .replace(/\r\n?/g, "\n")
-    .replace(/([^\n])\s*(#{1,6}\s+)/g, "$1\n\n$2")
+    .replace(/([^#\n])\s*(#{1,6}\s+)/g, "$1\n\n$2")
     .replace(/([^\n])\s*(---+|___+|\*\*\*+)\s*(?=\n|$)/g, "$1\n\n$2")
     .replace(/([^\n])\s*(```)/g, "$1\n\n$2")
     .replace(/([.!?\)])(Let me|Now let me|I'll|I will|Next,|Good!|Great!|Excellent!|Perfect!|Excellent\.)/g, "$1\n\n$2")

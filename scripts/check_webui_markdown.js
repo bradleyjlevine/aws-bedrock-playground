@@ -50,6 +50,13 @@ alpha | beta
 
 const html = render(comprehensive);
 assert(html.includes("<h1>Executive Summary</h1>"));
+
+const nestedHeadings = render(`## Executive Summary
+
+### Key Threat Trends`);
+assert(nestedHeadings.includes("<h2>Executive Summary</h2>"));
+assert(nestedHeadings.includes("<h3>Key Threat Trends</h3>"));
+assert(!nestedHeadings.includes("# Executive Summary"));
 assert(html.includes("<strong>critical</strong>"));
 assert(html.includes("<em>emphasis</em>"));
 assert(html.includes("<del>removed text</del>"));

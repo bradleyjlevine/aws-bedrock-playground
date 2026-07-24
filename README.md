@@ -35,7 +35,7 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 | `examples/agents/10_strands_swarm_handoff.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Swarm: autonomous agent handoff (triage → specialist) |
 | `examples/agents/11_strands_streaming_cli_hitl.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | Streaming CLI chat + `current_time` + HITL via `handoff_to_user` |
 | `examples/agents/12_strands_webui_sse_hitl.py` | Claude Haiku 4.5 | Strands SDK · `bedrock-runtime` | FastAPI + SSE browser chat + `current_time` + HITL approval card |
-| `examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py` | GPT-5.5 / GPT-5.4 | OpenAI Responses API · `bedrock-mantle /openai/v1` | FastAPI + SSE summary UI using `AsyncBedrockOpenAI` |
+| `examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py` | GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4 | OpenAI Responses API · `bedrock-mantle /openai/v1` | FastAPI + SSE summary UI with a model picker, retries, heartbeat events, and GPT-5.4 fallback |
 | `examples/cybersecurity/14_strands_cybersec_triage_graph.py` | GPT OSS 120B | Strands Graph · `bedrock-runtime` | Multi-agent cyber triage graph for PDF, URL, HTML, or text inputs |
 | `examples/cybersecurity/15_strands_structured_cybersec_brief.py` | GPT OSS 120B | Strands structured output · `bedrock-runtime` | Validated Pydantic cyber briefing object from PDF, URL, HTML, or text inputs |
 | `examples/agents/16_strands_local_memory_advisor.py` | Claude Haiku 4.5 | Strands tools · `bedrock-runtime` | Local durable memory tools for briefing preferences |
@@ -59,7 +59,7 @@ Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock
 
 | Use case | Script | Model path | Required env vars | Port | External services |
 |----------|--------|------------|-------------------|------|-------------------|
-| GPT-5.5 cyber report summary WebUI | `examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py` | Bedrock Mantle `/openai/v1` Responses API | `AWS_PROFILE` optional; active AWS credentials need `bedrock-mantle:CreateInference` | `8001` | User-supplied public URLs; local PDF extraction |
+| OpenAI cyber report summary WebUI | `examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py` | Bedrock Mantle `/openai/v1` Responses API | `AWS_PROFILE` optional; active AWS credentials need `bedrock-mantle:CreateInference` | `8001` | User-supplied public URLs; local PDF extraction |
 | Multi-agent cyber triage graph | `examples/cybersecurity/14_strands_cybersec_triage_graph.py` | Strands `BedrockModel` via `bedrock-runtime` | `AWS_PROFILE` optional; `BEDROCK_MODEL_ID` optional | N/A | Shodan CVEDB for CVE/EUVD enrichment; user-supplied public URLs |
 | Structured cyber brief extraction | `examples/cybersecurity/15_strands_structured_cybersec_brief.py` | Strands structured output via `bedrock-runtime` | `AWS_PROFILE` optional; `BEDROCK_MODEL_ID` optional | N/A | Shodan CVEDB for CVE/EUVD enrichment; user-supplied public URLs |
 | Spoken incident briefing | `examples/cybersecurity/18_nova_sonic_voice_incident_briefing.py` | Nova Sonic via `bedrock-runtime` bidirectional streaming | `AWS_PROFILE` optional | N/A | Local microphone/speaker devices |
@@ -93,6 +93,16 @@ Files `13`-`15`, `24`-`26`, and `29` use Unstructured for PDF extraction and doc
 partitioning. For maximum compatibility, install the native tools Unstructured
 relies on for file detection, PDFs, OCR, Office documents, and other document
 formats:
+
+The shared `pdf_utils.py` helper caches successful PDF text extraction by the
+SHA-256 hash of the PDF bytes, so uploading the same document again skips the
+comparatively slow Unstructured pass. The default cache is
+`~/Library/Caches/aws-bedrock-playground/pdf-text-v1` on macOS and
+`~/.cache/aws-bedrock-playground/pdf-text-v1` on other platforms. Set
+`PDF_TEXT_CACHE_DIR` to choose another location, or
+`PDF_TEXT_CACHE_ENABLED=0` to disable it. Cache files contain extracted document
+text, are written atomically with user-only permissions, and can be safely
+deleted to force re-extraction.
 
 - [`libmagic-dev`](https://man7.org/linux/man-pages/man3/libmagic.3.html) for filetype detection
 - [`poppler-utils`](https://poppler.freedesktop.org/), [`tesseract-ocr`](https://github.com/tesseract-ocr/tesseract), and `tesseract-lang` for images and PDFs
@@ -196,7 +206,7 @@ The mantle endpoint uses two different base paths depending on the model:
 - `examples/agents/10_strands_swarm_handoff.py` shows the `Swarm` class: a triage agent classifies each question and hands off to the right specialist. Strands injects a `handoff_to_agent` tool into every agent in the swarm automatically.
 - `examples/agents/11_strands_streaming_cli_hitl.py` runs an interactive CLI chat loop. Includes `current_time` and a `send_email` tool gated behind `handoff_to_user` — the agent pauses and asks for approval; `send_email` only executes after the user confirms. Type `quit` or press Ctrl-C to exit cleanly.
 - `examples/agents/12_strands_webui_sse_hitl.py` runs a FastAPI server on `http://localhost:8000` with a single-page chat UI. Includes `current_time`. Tokens stream over SSE; `send_email` triggers a Strands `BeforeToolCallEvent` interrupt, the browser shows an Approve / Deny card with the drafted email, and the agent only resumes after the user clicks. Try: *"Email alex@example.com saying the deploy is done."* or *"What time is it?"*
-- `examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py` runs a FastAPI server on `http://localhost:8001`. Upload a PDF or enter a URL; PDF text is extracted locally with Unstructured (`partition_pdf`) and summarized with GPT-5.5, falling back to GPT-5.4 for known intermittent Mantle failures.
+- `examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py` runs a FastAPI server on `http://localhost:8001`. Upload PDFs or enter URLs, then choose GPT-5.6 Sol, Terra, Luna, GPT-5.5, or GPT-5.4. PDF text is extracted locally with Unstructured (`partition_pdf`) before the selected model receives it through Bedrock Mantle's `/openai/v1` Responses API. Responses stream token-by-token; idle SSE heartbeats keep the browser connection active, transient pre-output failures retry with exponential backoff and jitter, and models other than GPT-5.4 fall back to GPT-5.4 after their retries are exhausted. Tune the behavior with `MANTLE_REQUEST_TIMEOUT_SECONDS`, `MANTLE_PRIMARY_MAX_ATTEMPTS`, `MANTLE_FALLBACK_MAX_ATTEMPTS`, `MANTLE_RETRY_BASE_SECONDS`, `MANTLE_HEARTBEAT_SECONDS`, `MANTLE_MAX_OUTPUT_TOKENS`, and `WEBUI_GRACEFUL_SHUTDOWN_SECONDS` (default `5`) to bound Ctrl-C/SIGTERM shutdown while streams are active.
 
   ![Example 13 GPT-5.5 cyber-security summary UI](media/2026-06-20_13-14-14_13_gpt_5_5_example.png)
 

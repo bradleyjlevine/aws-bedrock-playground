@@ -1,11 +1,11 @@
 """
-Hello World: Cyber-Security Summary WebUI — GPT-5.5 via Bedrock Mantle
-Upload a PDF or enter a URL; GPT-5.5 summarizes key changes in the cyber-security
-landscape and streams the result back to the browser.
+Hello World: Cyber-Security Summary WebUI — OpenAI models via Bedrock Mantle
+Upload a PDF or enter a URL; the selected OpenAI model summarizes key changes in
+the cyber-security landscape and streams the result back to the browser.
 
 PDF handling:
   Text is extracted from the PDF locally with Unstructured, falling back to pypdf,
-  then sent to GPT-5.5 as text. This avoids the Bedrock Mantle request-body size
+  then sent to the selected model as text. This avoids the Bedrock Mantle request-body size
   limit that rejects large base64 payloads.
 
 Webpage handling:
@@ -15,7 +15,7 @@ Webpage handling:
 Architecture:
   GET  /           — self-contained HTML page (file upload + URL input + chat log)
   POST /analyse    — multipart form: file (optional) + url (optional); streams SSE
-                       token | done | error events
+                       token | status | heartbeat | done | error events
 
 Install: uv sync
 SSO:     aws sso login --profile my-sso-profile && export AWS_PROFILE=my-sso-profile
@@ -36,9 +36,11 @@ LOGGER = configure_script_logging(__file__)
 
 import asyncio
 import json
+import os
+import random
 
 import uvicorn
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from openai import AsyncBedrockOpenAI
 
@@ -49,15 +51,32 @@ from webui_interactions import WEBUI_INTERACTIONS_JS
 from webui_markdown import MARKDOWN_RENDERER_JS
 from webui_theme import WEBUI_THEME_CSS
 
-REGION = "us-east-2"  # GPT-5.5 / GPT-5.4 both available in us-east-2 (Ohio)
+REGION = "us-east-2"  # All picker models are available in us-east-2 (Ohio).
 PRIMARY_MODEL = "openai.gpt-5.5"
 FALLBACK_MODEL = "openai.gpt-5.4"
-REQUEST_TIMEOUT_SECONDS = 45.0
+MANTLE_MODEL_OPTIONS = (
+    ("openai.gpt-5.6-sol", "GPT-5.6 Sol — flagship reasoning"),
+    ("openai.gpt-5.6-terra", "GPT-5.6 Terra — balanced"),
+    ("openai.gpt-5.6-luna", "GPT-5.6 Luna — fast and economical"),
+    ("openai.gpt-5.5", "GPT-5.5 — advanced professional work"),
+    ("openai.gpt-5.4", "GPT-5.4 — reliable reasoning"),
+)
+MANTLE_MODEL_IDS = frozenset(model_id for model_id, _label in MANTLE_MODEL_OPTIONS)
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("MANTLE_REQUEST_TIMEOUT_SECONDS", "180"))
+PRIMARY_MAX_ATTEMPTS = max(1, int(os.getenv("MANTLE_PRIMARY_MAX_ATTEMPTS", "3")))
+FALLBACK_MAX_ATTEMPTS = max(1, int(os.getenv("MANTLE_FALLBACK_MAX_ATTEMPTS", "2")))
+RETRY_BASE_SECONDS = max(0.0, float(os.getenv("MANTLE_RETRY_BASE_SECONDS", "1")))
+HEARTBEAT_SECONDS = max(1.0, float(os.getenv("MANTLE_HEARTBEAT_SECONDS", "10")))
+GRACEFUL_SHUTDOWN_SECONDS = max(
+    0.0,
+    float(os.getenv("WEBUI_GRACEFUL_SHUTDOWN_SECONDS", "5")),
+)
+MAX_OUTPUT_TOKENS = max(1, int(os.getenv("MANTLE_MAX_OUTPUT_TOKENS", "4096")))
 MANTLE_DEFAULT_HEADERS = {"OpenAI-Project": "default"}
 
 
-def is_gpt55_outage(exc: BaseException) -> bool:
-    """Match the known intermittent Bedrock-side failure mode for GPT-5.5."""
+def is_mantle_model_outage(exc: BaseException) -> bool:
+    """Match known Bedrock-side model failure modes that allow fallback."""
     msg = str(exc).lower()
     return (
         "internal_server_error" in msg
@@ -65,6 +84,45 @@ def is_gpt55_outage(exc: BaseException) -> bool:
         or "server had an error" in msg
         or "timed out" in msg
         or "timeout" in msg
+    )
+
+
+def _status_code(exc: BaseException) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _request_id(exc: BaseException) -> str | None:
+    request_id = getattr(exc, "request_id", None)
+    if request_id:
+        return str(request_id)
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers:
+        return headers.get("x-request-id") or headers.get("x-amzn-requestid")
+    return None
+
+
+def _is_transient_model_error(exc: BaseException) -> bool:
+    """Return whether retrying the same Mantle request is reasonable."""
+    status = _status_code(exc)
+    if status in {408, 409, 429, 500, 502, 503, 504}:
+        return True
+    msg = str(exc).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "internal_server_error",
+            "server had an error",
+            "service unavailable",
+            "timed out",
+            "timeout",
+            "connection reset",
+        )
     )
 
 
@@ -124,52 +182,167 @@ def _response_text(response) -> str:
     return "\n".join(parts).strip()
 
 
-async def _run_model(model_id: str, content_blocks: list):
-    """Run the summary request, raising on error so the caller can fall back."""
+async def _run_model(model_id: str, content_blocks: list, *, max_attempts: int = 1):
+    """Stream a model response and retry transient pre-output failures."""
     input_text = "\n\n".join(block["text"] for block in content_blocks)
-    LOGGER.debug(
-        "Calling model=%s input_chars=%s content_blocks=%s",
-        model_id,
-        len(input_text),
-        len(content_blocks),
-    )
-    async with _make_client() as client:
-        response = await client.responses.create(
-            model=model_id,
-            instructions=SYSTEM_PROMPT,
-            input=input_text,
+    for attempt in range(1, max_attempts + 1):
+        streamed_any = False
+        output_chars = 0
+        LOGGER.info(
+            "Calling model=%s attempt=%s/%s input_chars=%s content_blocks=%s "
+            "timeout_seconds=%s max_output_tokens=%s",
+            model_id,
+            attempt,
+            max_attempts,
+            len(input_text),
+            len(content_blocks),
+            REQUEST_TIMEOUT_SECONDS,
+            MAX_OUTPUT_TOKENS,
         )
-    text = _response_text(response)
-    LOGGER.debug("Model %s returned output_chars=%s", model_id, len(text))
-    if not text:
-        LOGGER.debug("Empty response object from %s: %r", model_id, response)
-        raise EmptyModelOutput(f"{model_id} returned no assistant text")
-    yield text
+        try:
+            async with _make_client() as client:
+                stream = await client.responses.create(
+                    model=model_id,
+                    instructions=SYSTEM_PROMPT,
+                    input=input_text,
+                    max_output_tokens=MAX_OUTPUT_TOKENS,
+                    stream=True,
+                )
+                async for event in stream:
+                    if getattr(event, "type", None) != "response.output_text.delta":
+                        continue
+                    delta = getattr(event, "delta", None)
+                    if not delta:
+                        continue
+                    streamed_any = True
+                    output_chars += len(delta)
+                    yield delta
+            if not streamed_any:
+                raise EmptyModelOutput(f"{model_id} returned no assistant text")
+            LOGGER.info(
+                "Model completed model=%s attempt=%s output_chars=%s",
+                model_id,
+                attempt,
+                output_chars,
+            )
+            return
+        except Exception as exc:
+            status = _status_code(exc)
+            request_id = _request_id(exc)
+            LOGGER.warning(
+                "Model request failed model=%s attempt=%s/%s streamed_any=%s "
+                "status=%s request_id=%s error_type=%s error=%s",
+                model_id,
+                attempt,
+                max_attempts,
+                streamed_any,
+                status,
+                request_id,
+                type(exc).__name__,
+                exc,
+            )
+            if streamed_any or attempt >= max_attempts or not _is_transient_model_error(exc):
+                raise
+            delay = RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            delay = random.uniform(delay * 0.5, delay * 1.5)
+            LOGGER.info(
+                "Retrying model=%s after %.2fs attempt=%s/%s",
+                model_id,
+                delay,
+                attempt + 1,
+                max_attempts,
+            )
+            await asyncio.sleep(delay)
 
 
-async def _stream_analysis(content_blocks: list):
-    """Try GPT-5.5; fall back to GPT-5.4 on known intermittent Bedrock errors."""
+async def _with_heartbeats(source):
+    """Yield source values and None heartbeats while a model stream is idle."""
+    queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+
+    async def produce() -> None:
+        try:
+            async for value in source:
+                await queue.put(("value", value))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await queue.put(("error", exc))
+        finally:
+            await queue.put(("done", None))
+
+    task = asyncio.create_task(produce())
+    try:
+        while True:
+            try:
+                kind, value = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=HEARTBEAT_SECONDS,
+                )
+            except TimeoutError:
+                yield None
+                continue
+            if kind == "value":
+                yield value
+            elif kind == "error":
+                raise value
+            else:
+                return
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _stream_analysis(content_blocks: list, model_id: str = PRIMARY_MODEL):
+    """Run the selected model; fall back to GPT-5.4 after pre-output failures."""
     streamed_any = False
     fallback_reason: str | None = None
     try:
-        async for text in _run_model(PRIMARY_MODEL, content_blocks):
+        primary_stream = _run_model(
+            model_id,
+            content_blocks,
+            max_attempts=PRIMARY_MAX_ATTEMPTS,
+        )
+        async for text in _with_heartbeats(primary_stream):
+            if text is None:
+                yield _sse({"type": "heartbeat"})
+                continue
             streamed_any = True
             yield _sse({"type": "token", "text": text})
     except Exception as exc:
-        can_fallback = isinstance(exc, EmptyModelOutput) or is_gpt55_outage(exc)
+        can_fallback = (
+            model_id != FALLBACK_MODEL
+            and (isinstance(exc, EmptyModelOutput) or is_mantle_model_outage(exc))
+        )
         if streamed_any or not can_fallback:
             yield _sse({"type": "error", "text": str(exc)})
             return
         fallback_reason = str(exc)
 
     if not streamed_any and fallback_reason is None:
-        fallback_reason = f"{PRIMARY_MODEL} returned an empty stream"
+        fallback_reason = f"{model_id} returned an empty stream"
 
     if fallback_reason is not None:
-        yield _sse({"type": "token", "text": f"[notice] {PRIMARY_MODEL} unavailable ({fallback_reason}); retrying with {FALLBACK_MODEL}.\n\n"})
+        yield _sse(
+            {
+                "type": "token",
+                "text": (
+                    f"[notice] {model_id} unavailable ({fallback_reason}); "
+                    f"retrying with {FALLBACK_MODEL}.\n\n"
+                ),
+            }
+        )
         try:
             fallback_streamed = False
-            async for text in _run_model(FALLBACK_MODEL, content_blocks):
+            fallback_stream = _run_model(
+                FALLBACK_MODEL,
+                content_blocks,
+                max_attempts=FALLBACK_MAX_ATTEMPTS,
+            )
+            async for text in _with_heartbeats(fallback_stream):
+                if text is None:
+                    yield _sse({"type": "heartbeat"})
+                    continue
                 fallback_streamed = True
                 yield _sse({"type": "token", "text": text})
             if not fallback_streamed:
@@ -181,7 +354,11 @@ async def _stream_analysis(content_blocks: list):
     yield _sse({"type": "done"})
 
 
-async def _stream_request_analysis(files: list[UploadFile], url: str):
+async def _stream_request_analysis(
+    files: list[UploadFile],
+    url: str,
+    model_id: str = PRIMARY_MODEL,
+):
     """Extract all requested sources inside the SSE stream so progress is visible."""
     content_blocks: list = []
     source_count = 0
@@ -262,23 +439,29 @@ async def _stream_request_analysis(files: list[UploadFile], url: str):
         }
     )
 
-    yield _sse({"type": "status", "text": "Running model analysis."})
-    async for event in _stream_analysis(content_blocks):
+    yield _sse({"type": "status", "text": f"Running analysis with {model_id}."})
+    async for event in _stream_analysis(content_blocks, model_id):
         yield event
 
 
-async def _safe_stream_request_analysis(files: list[UploadFile], url: str):
+async def _safe_stream_request_analysis(
+    files: list[UploadFile],
+    url: str,
+    model_id: str = PRIMARY_MODEL,
+):
     sent_done = False
     try:
-        async for event in _stream_request_analysis(files, url):
+        async for event in _stream_request_analysis(files, url, model_id):
             if '"type": "done"' in event:
                 sent_done = True
             yield event
+    except asyncio.CancelledError:
+        LOGGER.info("Analysis stream cancelled during server shutdown or client disconnect")
+        raise
     except Exception as exc:
         yield _sse({"type": "error", "text": f"Unexpected server error: {exc}"})
-    finally:
-        if not sent_done:
-            yield _sse({"type": "done"})
+    if not sent_done:
+        yield _sse({"type": "done"})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -290,9 +473,12 @@ async def index() -> str:
 async def analyse(
     files: list[UploadFile] | None = File(default=None),
     url: str = Form(default=""),
+    model: str = Form(default=PRIMARY_MODEL),
 ) -> StreamingResponse:
+    if model not in MANTLE_MODEL_IDS:
+        raise HTTPException(status_code=400, detail="Unsupported Mantle model")
     return StreamingResponse(
-        _safe_stream_request_analysis(files or [], url),
+        _safe_stream_request_analysis(files or [], url, model),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -312,7 +498,7 @@ HTML_PAGE = """\
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230066cc'/><path d='M18 43h28M22 35l7-8 7 5 8-12' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
-  <title>Cyber-Security Summary — GPT-5.5 / 5.4 on Bedrock</title>
+  <title>Cyber-Security Summary — OpenAI models on Bedrock</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     body {
@@ -327,7 +513,7 @@ HTML_PAGE = """\
       padding: 1.25rem; margin-bottom: 1rem;
     }
     .input-grid { display: grid; gap: 1rem; }
-    label { display: block; font-weight: 700; margin-bottom: 0.4rem; font-size: 0.9rem; }
+    label, .field-label { display: block; font-weight: 700; margin-bottom: 0.4rem; font-size: 0.9rem; }
     input[type="file"], textarea {
       width: 100%; padding: 0.55rem 0.75rem; border: 1px solid #d2d2d7;
       border-radius: 8px; font: inherit; background: #fafafa;
@@ -337,6 +523,90 @@ HTML_PAGE = """\
     }
     .divider { text-align: center; color: #8e8e93; font-size: 0.8rem; }
     .actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 1rem; }
+    .model-picker {
+      position: relative;
+      margin: 0;
+    }
+    .model-picker summary {
+      display: flex;
+      min-height: 42px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      width: 100%;
+      padding: 0.62rem 0.78rem;
+      border: 1px solid #d1d1d6;
+      border-radius: 10px;
+      background: #fafafa;
+      color: #1d1d1f;
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1.25;
+      list-style: none;
+    }
+    .model-picker summary::-webkit-details-marker { display: none; }
+    .model-picker summary::after {
+      content: "⌄";
+      color: #56647a;
+      font-size: 1.15rem;
+      line-height: 1;
+      transform: translateY(-0.12rem);
+      transition: transform 140ms ease;
+    }
+    .model-picker[open] summary::after {
+      transform: rotate(180deg) translateY(0.12rem);
+    }
+    .model-picker summary:focus-visible {
+      outline: 3px solid rgba(23, 107, 135, 0.28);
+      outline-offset: 2px;
+    }
+    .model-menu {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 6px);
+      left: 0;
+      width: 100%;
+      padding: 6px;
+      border: 1px solid #cbd6e4;
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 18px 42px rgba(22, 35, 58, 0.18);
+    }
+    .webui-shell button.model-option {
+      display: grid;
+      grid-template-columns: 1.25rem minmax(0, 1fr);
+      gap: 0.5rem;
+      width: 100%;
+      min-height: 42px;
+      padding: 0.62rem 0.7rem;
+      border: 0;
+      border-radius: 8px;
+      background: transparent !important;
+      color: #314158;
+      cursor: pointer;
+      font-size: 0.94rem;
+      font-weight: 650;
+      line-height: 1.3;
+      text-align: left;
+    }
+    .webui-shell button.model-option::before {
+      content: "";
+      color: var(--ui-accent-deep);
+      font-weight: 800;
+    }
+    .webui-shell button.model-option[aria-selected="true"]::before {
+      content: "✓";
+    }
+    .webui-shell button.model-option:hover,
+    .webui-shell button.model-option:focus-visible,
+    .webui-shell button.model-option[aria-selected="true"] {
+      background: #e8f1f6 !important;
+      color: #16233a;
+    }
+    .model-picker[data-disabled="true"] summary {
+      cursor: wait;
+      opacity: 0.58;
+    }
     button {
       padding: 0.6rem 1.2rem; border: 0; border-radius: 8px;
       background: #0066cc; color: #fff; font: inherit; font-weight: 600;
@@ -421,11 +691,26 @@ HTML_PAGE = """\
     <div>
       <p class="ui-eyebrow">Security analysis / Bedrock Mantle</p>
       <h1>Cyber-security landscape summariser</h1>
-      <p class="subtitle ui-subtitle">Turn PDFs and public reports into a structured security briefing with GPT-5.5 and GPT-5.4 fallback.</p>
+      <p class="subtitle ui-subtitle">Turn PDFs and public reports into a structured security briefing with your choice of OpenAI model on Bedrock Mantle.</p>
     </div>
   </header>
 
   <div class="card ui-panel">
+        <div class="field-label" id="model-label">OpenAI model</div>
+        <details class="model-picker" id="model-picker">
+          <summary aria-labelledby="model-label model-summary">
+            <span id="model-summary">GPT-5.5 — advanced professional work</span>
+          </summary>
+          <div class="model-menu" role="listbox" aria-labelledby="model-label">
+            <button type="button" class="model-option" role="option" aria-selected="false" data-model="openai.gpt-5.6-sol">GPT-5.6 Sol — flagship reasoning</button>
+            <button type="button" class="model-option" role="option" aria-selected="false" data-model="openai.gpt-5.6-terra">GPT-5.6 Terra — balanced</button>
+            <button type="button" class="model-option" role="option" aria-selected="false" data-model="openai.gpt-5.6-luna">GPT-5.6 Luna — fast and economical</button>
+            <button type="button" class="model-option" role="option" aria-selected="true" data-model="openai.gpt-5.5">GPT-5.5 — advanced professional work</button>
+            <button type="button" class="model-option" role="option" aria-selected="false" data-model="openai.gpt-5.4">GPT-5.4 — reliable reasoning</button>
+          </div>
+        </details>
+        <input type="hidden" id="model-input" value="openai.gpt-5.5">
+        <div class="hint">All choices use the Bedrock Mantle Responses API in us-east-2.</div>
     <div class="input-grid">
       <div>
         <label for="file-input">Upload PDFs</label>
@@ -458,6 +743,10 @@ HTML_PAGE = """\
 """ + WEBUI_INTERACTIONS_JS + """
 const fileInput    = document.getElementById("file-input");
 const urlInput     = document.getElementById("url-input");
+const modelInput   = document.getElementById("model-input");
+const modelPicker  = document.getElementById("model-picker");
+const modelSummary = document.getElementById("model-summary");
+const modelOptions = [...document.querySelectorAll(".model-option")];
 const analyseBtn   = document.getElementById("analyse-btn");
 const clearBtn     = document.getElementById("clear-btn");
 const output       = document.getElementById("output");
@@ -466,7 +755,38 @@ const sourceMeta   = document.getElementById("source-meta");
 let markdownBuffer = "";
 
 function setStatus(msg) { status.textContent = msg; }
-function setEnabled(v)  { analyseBtn.disabled = !v; }
+function setEnabled(v)  {
+  analyseBtn.disabled = !v;
+  modelPicker.dataset.disabled = String(!v);
+  modelPicker.querySelector("summary").setAttribute("aria-disabled", String(!v));
+  modelOptions.forEach(option => { option.disabled = !v; });
+  if (!v) modelPicker.open = false;
+}
+
+modelOptions.forEach(option => {
+  option.addEventListener("click", event => {
+    event.preventDefault();
+    event.stopPropagation();
+    modelInput.value = option.dataset.model;
+    modelSummary.textContent = option.textContent.trim();
+    modelOptions.forEach(candidate => {
+      candidate.setAttribute("aria-selected", String(candidate === option));
+    });
+    setTimeout(() => { modelPicker.open = false; }, 0);
+  });
+});
+
+modelPicker.addEventListener("toggle", () => {
+  if (modelPicker.dataset.disabled === "true") modelPicker.open = false;
+});
+
+document.addEventListener("click", event => {
+  if (!modelPicker.contains(event.target)) modelPicker.open = false;
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") modelPicker.open = false;
+});
 
 function setMarkdown(markdown) {
   markdownBuffer = markdown;
@@ -514,6 +834,7 @@ analyseBtn.addEventListener("click", async () => {
   const form = new FormData();
   for (const file of files) form.append("files", file);
   if (urls.length) form.append("url", urls.join("\\n"));
+  form.append("model", modelInput.value);
 
   try {
     let resp;
@@ -579,4 +900,5 @@ if __name__ == "__main__":
         log_level="debug",
         log_config=None,
         access_log=True,
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
     )

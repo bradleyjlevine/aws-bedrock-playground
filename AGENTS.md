@@ -47,7 +47,7 @@ examples/agents/09_strands_file_session_history.py       # Strands FileSessionMa
 examples/agents/10_strands_swarm_handoff.py         # Strands Swarm (autonomous handoff)
 examples/agents/11_strands_streaming_cli_hitl.py     # Custom callback_handler + CLI chat loop + current_time + HITL (handoff_to_user)
 examples/agents/12_strands_webui_sse_hitl.py         # FastAPI + SSE WebUI chat (browser) + current_time + HITL (interrupt hook)
-examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py      # FastAPI + SSE WebUI: upload PDF or URL → GPT-5.5 cyber-security summary
+examples/cybersecurity/13_mantle_gpt55_cybersec_webui.py      # FastAPI + SSE WebUI: PDF/URL → selectable OpenAI model cyber-security summary
 examples/cybersecurity/14_strands_cybersec_triage_graph.py     # Strands Graph: cyber triage over PDF/URL/HTML/text sources
 examples/cybersecurity/15_strands_structured_cybersec_brief.py # Strands structured output: validated cyber brief object
 examples/agents/16_strands_local_memory_advisor.py      # Strands tools: local durable memory advisor
@@ -74,13 +74,14 @@ pyproject.toml                 # uv project config
 
 ### Two different bedrock-mantle base paths
 - `/v1` — OSS models (`openai.gpt-oss-*`), Amazon Nova, and most third-party models (Chat Completions + Responses API)
-- `/openai/v1` — GPT-5.5 and GPT-5.4 **only** (Responses API only, no Chat Completions)
+- `/openai/v1` — OpenAI GPT-5.6 Sol/Terra/Luna, GPT-5.5, and GPT-5.4 (Responses API only, no Chat Completions)
 - `/anthropic` — Claude models (used internally by the `anthropic` SDK)
 
 Getting this wrong produces a 400 "Engine not found" from AWS. Do not unify them.
 
-**GPT-5.5 / GPT-5.4 region**: only available in `us-east-2` (Ohio). Using `us-east-1`
-returns "Engine not found". No model access request needed — available by default.
+The OpenAI model WebUI uses `us-east-2` because all five picker models are available
+there. AWS also publishes additional region availability per model; do not assume
+every `/openai/v1` model is available in every Mantle region.
 
 ### auth.py — bearer token generation for bedrock-mantle
 `auth.py` is only a helper for minting Bedrock Mantle bearer tokens from the active
@@ -105,8 +106,9 @@ client args so GPT-5.4 routes through `/openai/v1` with a fresh token from
 - `bedrock-runtime` and `bedrock-agent-runtime` calls work with standard `Bedrock_PowerUser` roles.
 - `bedrock-mantle` requires `bedrock-mantle:CreateInference` — this is a **separate IAM action** not included in most Bedrock managed policies. Confirm the active profile has this before debugging mantle auth errors.
 
-### GPT-5.5 supports Responses API only
-`openai.gpt-5.5` does not support Chat Completions. Use `client.responses.create()`.
+### OpenAI GPT-5.4+ models use the Responses API
+The `/openai/v1` OpenAI models do not support Chat Completions. Use
+`client.responses.create()` and preserve streaming for browser-facing requests.
 
 ### SSO session expiry
 If you see `TokenRetrievalError: Token has expired`, the SSO session needs a refresh:
@@ -143,6 +145,12 @@ by GitHub Actions.
 fall back to `pypdf` even when Unstructured is not installed or its native
 runtime dependencies are unavailable. Direct Unstructured demos in files 24 and
 25 still require `unstructured[all-docs]`.
+
+Successful shared-helper extractions are cached by SHA-256 of the PDF bytes in
+the platform user cache (`pdf-text-v1`). `PDF_TEXT_CACHE_DIR` overrides the
+location and `PDF_TEXT_CACHE_ENABLED=0` disables caching. Keep cache writes
+atomic and user-readable only because entries contain extracted document text.
+Increment the cache version when extraction semantics change incompatibly.
 
 ## What NOT to do
 
