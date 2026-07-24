@@ -1,5 +1,7 @@
 # AWS Bedrock Playground
 
+[![Validate examples](https://github.com/bradleyjlevine/aws-bedrock-playground/actions/workflows/validate.yml/badge.svg)](https://github.com/bradleyjlevine/aws-bedrock-playground/actions/workflows/validate.yml)
+
 Hello-world examples for the main AWS Bedrock surfaces: Bedrock Runtime, Bedrock Agents, Bedrock Mantle, Strands Agents, MCP tools, document extraction, and voice streaming.
 
 ## Key concepts shown
